@@ -1,0 +1,59 @@
+{
+  "name": "GaaP MCP Error Mapper",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Error Mapper - Maps internal errors to standardized MCP error responses\n// =============================================================================\n// Provides consistent error codes and messages across all MCP tools\n//\n// Input: {\n//   error_type: 'db_error' | 'validation' | 'auth' | 'external_api' | ...,\n//   original_error?: string | object,\n//   context?: { ... }\n// }\n//\n// Output: {\n//   code: string,\n//   message: string,\n//   recoverable: boolean,\n//   suggested_action?: string,\n//   gaap_layer: string\n// }\n// =============================================================================\n\nconst input = $input.first().json;\n\n// Error mapping definitions\nconst errorMappings = {\n  // MCP Layer Errors\n  'validation': {\n    code: 'MCP_VALIDATION_ERROR',\n    message: 'Request validation failed',\n    recoverable: false,\n    gaap_layer: 'MCP'\n  },\n  'auth': {\n    code: 'MCP_AUTH_ERROR',\n    message: 'Authentication failed',\n    recoverable: false,\n    gaap_layer: 'MCP'\n  },\n  'rate_limit': {\n    code: 'MCP_RATE_LIMIT_EXCEEDED',\n    message: 'Rate limit exceeded',\n    recoverable: true,\n    suggested_action: 'Wait and retry after rate limit window resets',\n    gaap_layer: 'MCP'\n  },\n  'nonce_reused': {\n    code: 'MCP_NONCE_REUSED',\n    message: 'Nonce has already been used',\n    recoverable: true,\n    suggested_action: 'Generate a new unique nonce',\n    gaap_layer: 'MCP'\n  },\n  'tenant_not_found': {\n    code: 'MCP_TENANT_NOT_FOUND',\n    message: 'Tenant not found or not configured',\n    recoverable: false,\n    gaap_layer: 'MCP'\n  },\n  \n  // L1 Identity Errors\n  'camdigikey_unavailable': {\n    code: 'L1_CAMDIGIKEY_UNAVAILABLE',\n    message: 'CamDigiKey service is temporarily unavailable',\n    recoverable: true,\n    suggested_action: 'Retry after a short delay',\n    gaap_layer: 'L1'\n  },\n  'identity_insufficient': {\n    code: 'L1_IDENTITY_LEVEL_INSUFFICIENT',\n    message: 'Identity verification level is insufficient for this transaction',\n    recoverable: false,\n    gaap_layer: 'L1'\n  },\n  \n  // L2 Policy Errors\n  'camdx_blocked': {\n    code: 'L2_CAMDX_POLICY_BLOCKED',\n    message: 'Transaction blocked by CamDX policy',\n    recoverable: false,\n    gaap_layer: 'L2'\n  },\n  'camdx_timeout': {\n    code: 'L2_CAMDX_TIMEOUT',\n    message: 'CamDX request timed out',\n    recoverable: true,\n    suggested_action: 'Retry the request',\n    gaap_layer: 'L2'\n  },\n  \n  // L3 Payment Errors\n  'khqr_generation_failed': {\n    code: 'L3_KHQR_GENERATION_FAILED',\n    message: 'Failed to generate KHQR payment code',\n    recoverable: true,\n    suggested_action: 'Retry the request',\n    gaap_layer: 'L3'\n  },\n  'bakong_unavailable': {\n    code: 'L3_BAKONG_UNAVAILABLE',\n    message: 'Bakong payment service is temporarily unavailable',\n    recoverable: true,\n    suggested_action: 'Retry after a short delay',\n    gaap_layer: 'L3'\n  },\n  'settlement_timeout': {\n    code: 'L3_SETTLEMENT_TIMEOUT',\n    message: 'Payment settlement verification timed out',\n    recoverable: true,\n    suggested_action: 'Check payment status manually or retry',\n    gaap_layer: 'L3'\n  },\n  'amount_exceeds_limit': {\n    code: 'L3_AMOUNT_EXCEEDS_LIMIT',\n    message: 'Transaction amount exceeds allowed limit',\n    recoverable: false,\n    gaap_layer: 'L3'\n  },\n  \n  // L4 Compliance Errors\n  'camdl_anchor_failed': {\n    code: 'L4_CAMDL_ANCHOR_FAILED',\n    message: 'Failed to anchor event to CamDL blockchain',\n    recoverable: true,\n    suggested_action: 'Event logged locally, blockchain anchoring will be retried',\n    gaap_layer: 'L4'\n  },\n  'audit_hash_collision': {\n    code: 'L4_AUDIT_HASH_COLLISION',\n    message: 'Audit event hash collision detected',\n    recoverable: false,\n    gaap_layer: 'L4'\n  },\n  \n  // Database Errors\n  'db_error': {\n    code: 'MCP_DATABASE_ERROR',\n    message: 'Database operation failed',\n    recoverable: true,\n    suggested_action: 'Retry the request',\n    gaap_layer: 'MCP'\n  },\n  'db_connection': {\n    code: 'MCP_DATABASE_UNAVAILABLE',\n    message: 'Database connection failed',\n    recoverable: true,\n    suggested_action: 'Retry after a short delay',\n    gaap_layer: 'MCP'\n  },\n  \n  // External API Errors\n  'external_api': {\n    code: 'MCP_EXTERNAL_API_ERROR',\n    message: 'External API call failed',\n    recoverable: true,\n    suggested_action: 'Retry the request',\n    gaap_layer: 'MCP'\n  },\n  \n  // Default\n  'unknown': {\n    code: 'MCP_INTERNAL_ERROR',\n    message: 'An internal error occurred',\n    recoverable: false,\n    gaap_layer: 'MCP'\n  }\n};\n\n// Get error mapping\nconst errorType = input.error_type || 'unknown';\nconst mapping = errorMappings[errorType] || errorMappings['unknown'];\n\n// Enhance message with original error if available\nlet message = mapping.message;\nif (input.original_error) {\n  const origError = typeof input.original_error === 'string' \n    ? input.original_error \n    : input.original_error.message || JSON.stringify(input.original_error);\n  message = `${mapping.message}: ${origError}`;\n}\n\nreturn [{\n  json: {\n    code: mapping.code,\n    message: message,\n    recoverable: mapping.recoverable,\n    suggested_action: mapping.suggested_action || null,\n    gaap_layer: mapping.gaap_layer,\n    original_type: errorType,\n    context: input.context || {}\n  }\n}];"
+      },
+      "id": "map-error",
+      "name": "Map Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Map Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    },
+    {
+      "name": "shared",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,755 @@
+{
+  "name": "GaaP MCP Tool Gateway",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gaap-mcp/invoke",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "webhook-entry",
+      "name": "Webhook Entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "gaap-mcp-gateway"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// STEP 1: Extract and validate request structure\n// =============================================================================\nconst startTime = Date.now();\nconst headers = $input.first().json.headers || {};\nconst body = $input.first().json.body || {};\n\n// Generate request ID if not provided\nconst requestId = body.meta?.request_id || `GAAP-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;\n\n// Required fields validation\nconst requiredFields = ['tool', 'tenant_context'];\nconst missingFields = requiredFields.filter(f => !body[f]);\n\nif (missingFields.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_INVALID_REQUEST',\n        message: `Missing required fields: ${missingFields.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Validate tenant_context structure\nconst tenantContext = body.tenant_context;\nif (!tenantContext.tenant_id) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_INVALID_TENANT_CONTEXT',\n        message: 'tenant_context.tenant_id is required',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Extract headers for auth verification\nconst authHeaders = {\n  tenantId: headers['x-tenant-id'] || headers['X-Tenant-ID'],\n  apiKey: headers['x-api-key'] || headers['X-API-Key'],\n  timestamp: headers['x-timestamp'] || headers['X-Timestamp'],\n  nonce: headers['x-nonce'] || headers['X-Nonce'],\n  signature: headers['x-signature'] || headers['X-Signature']\n};\n\n// Validate required auth headers\nconst requiredHeaders = ['tenantId', 'apiKey', 'timestamp', 'nonce', 'signature'];\nconst missingHeaders = requiredHeaders.filter(h => !authHeaders[h]);\n\nif (missingHeaders.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_MISSING_AUTH_HEADERS',\n        message: `Missing required headers: X-${missingHeaders.map(h => h.replace(/([A-Z])/g, '-$1').toUpperCase()).join(', X-')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Validate tenant_id matches header\nif (authHeaders.tenantId !== tenantContext.tenant_id) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_TENANT_MISMATCH',\n        message: 'X-Tenant-ID header must match tenant_context.tenant_id',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Define tool to GaaP layer mapping\nconst toolLayerMap = {\n  'gaap_identity_verify': 'L1',\n  'gaap_identity_check_level': 'L1',\n  'gaap_identity_generate_qr': 'L1',\n  'gaap_policy_evaluate': 'L2',\n  'gaap_policy_publish_intent': 'L2',\n  'gaap_khqr_generate': 'L3',\n  'gaap_khqr_verify_settlement': 'L3',\n  'gaap_khqr_poll_status': 'L3',\n  'gaap_audit_log_event': 'L4',\n  'gaap_audit_anchor_batch': 'L4',\n  'gaap_audit_verify': 'L4',\n  'gaap_audit_generate_proof': 'L4'\n};\n\nconst toolName = body.tool;\nconst gaapLayer = toolLayerMap[toolName];\n\nif (!gaapLayer) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_UNKNOWN_TOOL',\n        message: `Unknown tool: ${toolName}. Available tools: ${Object.keys(toolLayerMap).join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Pass validated data forward\nreturn [{\n  json: {\n    _startTime: startTime,\n    request_id: requestId,\n    tool: toolName,\n    gaap_layer: gaapLayer,\n    tenant_context: tenantContext,\n    params: body.params || {},\n    meta: body.meta || {},\n    auth: authHeaders,\n    raw_body: JSON.stringify(body),\n    source_ip: $input.first().json.headers?.['x-forwarded-for'] || 'unknown'\n  }\n}];"
+      },
+      "id": "validate-request",
+      "name": "Validate Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-validation-error",
+      "name": "Check Validation Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// STEP 2: Verify authentication (HMAC signature, timestamp, nonce)\n// =============================================================================\nconst crypto = require('crypto');\nconst data = $input.first().json;\n\nconst startTime = data._startTime;\nconst requestId = data.request_id;\n\n// Timestamp freshness check (5 minute window)\nconst requestTimestamp = parseInt(data.auth.timestamp, 10);\nconst now = Date.now();\nconst maxAge = 5 * 60 * 1000; // 5 minutes\n\nif (isNaN(requestTimestamp)) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_INVALID_TIMESTAMP',\n        message: 'X-Timestamp must be a valid Unix timestamp in milliseconds',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\nif (requestTimestamp < now - maxAge || requestTimestamp > now + 60000) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_TIMESTAMP_EXPIRED',\n        message: 'Request timestamp is outside acceptable window (5 minutes)',\n        recoverable: true,\n        suggested_action: 'Retry with fresh timestamp'\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Build canonical string for signature verification\n// Format: METHOD|PATH|TIMESTAMP|NONCE|SHA256(body)\nconst method = 'POST';\nconst path = '/webhook/gaap-mcp/invoke';\nconst bodyHash = crypto.createHash('sha256').update(data.raw_body).digest('hex');\nconst canonicalString = `${method}|${path}|${data.auth.timestamp}|${data.auth.nonce}|${bodyHash}`;\n\n// Pass data forward for signature verification in DB context\nreturn [{\n  json: {\n    ...data,\n    _auth: {\n      canonical_string: canonicalString,\n      expected_signature: data.auth.signature,\n      timestamp_ms: requestTimestamp,\n      nonce: data.auth.nonce\n    }\n  }\n}];"
+      },
+      "id": "verify-auth",
+      "name": "Verify Auth",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, -100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-auth-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-auth-error",
+      "name": "Check Auth Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, -100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Set tenant context for RLS\nSET app.current_tenant_id = '{{ $json.tenant_context.tenant_id }}';\n\n-- Get tenant API key for signature verification\nSELECT \n  c.credential_id,\n  c.encrypted_value,\n  c.encryption_key_id,\n  c.scopes\nFROM gaap_mcp.credentials c\nWHERE c.tenant_id = '{{ $json.tenant_context.tenant_id }}'\n  AND c.credential_type = 'tenant_webhook_secret'\n  AND c.is_active = TRUE\n  AND (c.expires_at IS NULL OR c.expires_at > NOW());",
+        "options": {}
+      },
+      "id": "get-tenant-secret",
+      "name": "Get Tenant Secret",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1100, -200],
+      "credentials": {
+        "postgres": {
+          "id": "gaap-mcp-db",
+          "name": "GaaP MCP Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// STEP 3: Verify HMAC signature using tenant's webhook secret\n// =============================================================================\nconst crypto = require('crypto');\n\nconst inputData = $('Verify Auth').first().json;\nconst dbResult = $input.first().json;\nconst startTime = inputData._startTime;\nconst requestId = inputData.request_id;\n\n// Check if tenant secret was found\nif (!dbResult || !dbResult.encrypted_value) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_TENANT_NOT_FOUND',\n        message: 'Tenant not found or webhook secret not configured',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Check if tool is in allowed scopes\nconst allowedScopes = dbResult.scopes || [];\nif (!allowedScopes.includes(inputData.tool) && !allowedScopes.includes('*')) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_TOOL_NOT_AUTHORIZED',\n        message: `Tool '${inputData.tool}' is not authorized for this tenant`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Decrypt webhook secret (simplified - in production use proper key management)\n// Format: {iv}:{ciphertext}:{authTag}\nlet webhookSecret;\ntry {\n  const parts = dbResult.encrypted_value.split(':');\n  if (parts.length === 3) {\n    // For demo: assume it's a plaintext placeholder\n    // In production: decrypt using encryption_key_id from KMS\n    webhookSecret = parts[1]; // Use ciphertext as placeholder\n  } else {\n    // Fallback for development: treat as plaintext\n    webhookSecret = dbResult.encrypted_value;\n  }\n} catch (e) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_CREDENTIAL_DECRYPT_FAILED',\n        message: 'Failed to decrypt tenant webhook secret',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Compute expected signature\nconst expectedSignature = crypto\n  .createHmac('sha256', webhookSecret)\n  .update(inputData._auth.canonical_string)\n  .digest('hex');\n\n// Timing-safe comparison\nconst providedSig = inputData._auth.expected_signature;\nif (providedSig.length !== expectedSignature.length ||\n    !crypto.timingSafeEqual(Buffer.from(providedSig), Buffer.from(expectedSignature))) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_SIGNATURE_INVALID',\n        message: 'Request signature verification failed',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Signature valid - pass forward\nreturn [{\n  json: {\n    ...inputData,\n    _auth_verified: true,\n    _credential_id: dbResult.credential_id\n  }\n}];"
+      },
+      "id": "verify-signature",
+      "name": "Verify Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, -200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-sig-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-sig-error",
+      "name": "Check Signature Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1540, -200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Check and register nonce (prevents replay attacks)\nSELECT gaap_mcp.check_nonce(\n  '{{ $json.tenant_context.tenant_id }}'::UUID,\n  '{{ $json._auth.nonce }}',\n  to_timestamp({{ $json._auth.timestamp_ms }} / 1000.0)\n) AS nonce_valid;",
+        "options": {}
+      },
+      "id": "check-nonce",
+      "name": "Check Nonce",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1760, -300],
+      "credentials": {
+        "postgres": {
+          "id": "gaap-mcp-db",
+          "name": "GaaP MCP Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check nonce result\nconst inputData = $('Verify Signature').first().json;\nconst nonceResult = $input.first().json;\nconst startTime = inputData._startTime;\nconst requestId = inputData.request_id;\n\nif (!nonceResult.nonce_valid) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_NONCE_REUSED',\n        message: 'Nonce has already been used or timestamp is invalid (possible replay attack)',\n        recoverable: true,\n        suggested_action: 'Generate a new unique nonce for each request'\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Nonce valid - pass forward\nreturn [{\n  json: {\n    ...inputData,\n    _nonce_verified: true\n  }\n}];"
+      },
+      "id": "verify-nonce-result",
+      "name": "Verify Nonce Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, -300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-nonce-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-nonce-error",
+      "name": "Check Nonce Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2200, -300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Check rate limit\nSELECT gaap_mcp.check_rate_limit(\n  '{{ $json.tenant_context.tenant_id }}'::UUID,\n  'global'\n) AS rate_limit_ok;",
+        "options": {}
+      },
+      "id": "check-rate-limit",
+      "name": "Check Rate Limit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2420, -400],
+      "credentials": {
+        "postgres": {
+          "id": "gaap-mcp-db",
+          "name": "GaaP MCP Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check rate limit result\nconst inputData = $('Verify Nonce Result').first().json;\nconst rateResult = $input.first().json;\nconst startTime = inputData._startTime;\nconst requestId = inputData.request_id;\n\nif (!rateResult.rate_limit_ok) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_RATE_LIMIT_EXCEEDED',\n        message: 'Rate limit exceeded for this tenant',\n        recoverable: true,\n        suggested_action: 'Wait and retry after rate limit window resets'\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Rate limit OK - pass forward\nreturn [{\n  json: {\n    ...inputData,\n    _rate_limit_ok: true\n  }\n}];"
+      },
+      "id": "verify-rate-limit",
+      "name": "Verify Rate Limit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, -400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-rate-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-rate-limit-error",
+      "name": "Check Rate Limit Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2860, -400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Log tool invocation start\nINSERT INTO gaap_mcp.tool_invocations (\n  tenant_id,\n  request_id,\n  idempotency_key,\n  correlation_id,\n  tool_name,\n  gaap_layer,\n  request_params,\n  status,\n  source_workflow,\n  source_platform,\n  source_ip\n) VALUES (\n  '{{ $json.tenant_context.tenant_id }}'::UUID,\n  '{{ $json.request_id }}',\n  {{ $json.meta.idempotency_key ? \"'\" + $json.meta.idempotency_key + \"'\" : 'NULL' }},\n  {{ $json.tenant_context.correlation_id ? \"'\" + $json.tenant_context.correlation_id + \"'\" : 'NULL' }},\n  '{{ $json.tool }}',\n  '{{ $json.gaap_layer }}',\n  '{{ JSON.stringify($json.params).replace(/'/g, \"''\") }}'::JSONB,\n  'processing',\n  {{ $json.meta.source_workflow ? \"'\" + $json.meta.source_workflow + \"'\" : 'NULL' }},\n  {{ $json.meta.source_platform ? \"'\" + $json.meta.source_platform + \"'\" : 'NULL' }},\n  {{ $json.source_ip !== 'unknown' ? \"'\" + $json.source_ip + \"'::INET\" : 'NULL' }}\n)\nON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL\nDO UPDATE SET updated_at = NOW()\nRETURNING invocation_id;",
+        "options": {}
+      },
+      "id": "log-invocation-start",
+      "name": "Log Invocation Start",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3080, -500],
+      "credentials": {
+        "postgres": {
+          "id": "gaap-mcp-db",
+          "name": "GaaP MCP Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare for tool dispatch\nconst inputData = $('Verify Rate Limit').first().json;\nconst invocationResult = $input.first().json;\n\nreturn [{\n  json: {\n    ...inputData,\n    _invocation_id: invocationResult.invocation_id\n  }\n}];"
+      },
+      "id": "prepare-dispatch",
+      "name": "Prepare Dispatch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3300, -500]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.tool }}",
+                    "rightValue": "gaap_audit_log_event",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "audit_log_event"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.tool }}",
+                    "rightValue": "gaap_khqr_generate",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "khqr_generate"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.tool }}",
+                    "rightValue": "gaap_policy_evaluate",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "policy_evaluate"
+            }
+          ],
+          "fallbackOutput": {
+            "output": "extra",
+            "outputKey": "not_implemented"
+          }
+        },
+        "options": {}
+      },
+      "id": "dispatch-tool",
+      "name": "Dispatch Tool",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [3520, -500]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $workflow.id.replace('gaap_tool_gateway', 'audit_log_event') }}"
+        },
+        "options": {}
+      },
+      "id": "execute-audit-log",
+      "name": "Execute Audit Log",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [3740, -600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Tool not implemented yet\nconst inputData = $input.first().json;\nconst startTime = inputData._startTime;\n\nreturn [{\n  json: {\n    _error: true,\n    error: {\n      code: 'MCP_TOOL_NOT_IMPLEMENTED',\n      message: `Tool '${inputData.tool}' is not yet implemented`,\n      recoverable: false\n    },\n    meta: {\n      request_id: inputData.request_id,\n      execution_ms: Date.now() - startTime,\n      gaap_layer: inputData.gaap_layer\n    }\n  }\n}];"
+      },
+      "id": "tool-not-implemented",
+      "name": "Tool Not Implemented",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3740, -300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Build final response envelope\n// =============================================================================\nconst result = $input.first().json;\n\n// Check if this is an error response\nif (result._error || result.error) {\n  const error = result.error || result;\n  return [{\n    json: {\n      success: false,\n      error: {\n        code: error.code || 'MCP_UNKNOWN_ERROR',\n        message: error.message || 'An unknown error occurred',\n        recoverable: error.recoverable !== undefined ? error.recoverable : false,\n        suggested_action: error.suggested_action\n      },\n      meta: result.meta || {\n        request_id: 'unknown',\n        execution_ms: 0,\n        gaap_layer: 'MCP',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Success response\nreturn [{\n  json: {\n    success: true,\n    result: {\n      data: result.data || result,\n      correlation_id: result.correlation_id || result.meta?.correlation_id,\n      audit_event_id: result.audit_event_id\n    },\n    meta: {\n      request_id: result.meta?.request_id || result.request_id,\n      execution_ms: result.meta?.execution_ms || 0,\n      gaap_layer: result.meta?.gaap_layer || 'MCP',\n      camdl_anchored: result.meta?.camdl_anchored || result.camdl_anchored || false\n    }\n  }\n}];"
+      },
+      "id": "build-response",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4180, -400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": "={{ $json.success ? 200 : ($json.error?.code === 'MCP_RATE_LIMIT_EXCEEDED' ? 429 : ($json.error?.code?.startsWith('MCP_') ? 400 : 500)) }}"
+        }
+      },
+      "id": "respond-to-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [4400, -400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Update invocation with result\nUPDATE gaap_mcp.tool_invocations\nSET \n  completed_at = NOW(),\n  execution_ms = EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000,\n  status = CASE WHEN {{ $json.success }} THEN 'success' ELSE 'error' END,\n  response_data = '{{ JSON.stringify($json).replace(/'/g, \"''\") }}'::JSONB,\n  error_code = {{ $json.error?.code ? \"'\" + $json.error.code + \"'\" : 'NULL' }},\n  error_message = {{ $json.error?.message ? \"'\" + $json.error.message.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  is_recoverable = {{ $json.error?.recoverable !== undefined ? $json.error.recoverable : 'NULL' }}\nWHERE request_id = '{{ $json.meta?.request_id }}';",
+        "options": {}
+      },
+      "id": "log-invocation-end",
+      "name": "Log Invocation End",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [4400, -200],
+      "credentials": {
+        "postgres": {
+          "id": "gaap-mcp-db",
+          "name": "GaaP MCP Database"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Entry": {
+      "main": [
+        [
+          {
+            "node": "Validate Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Request": {
+      "main": [
+        [
+          {
+            "node": "Check Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Validation Error": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Verify Auth",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Auth": {
+      "main": [
+        [
+          {
+            "node": "Check Auth Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Auth Error": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Tenant Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Tenant Secret": {
+      "main": [
+        [
+          {
+            "node": "Verify Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Signature": {
+      "main": [
+        [
+          {
+            "node": "Check Signature Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Signature Error": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Nonce",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Nonce": {
+      "main": [
+        [
+          {
+            "node": "Verify Nonce Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Nonce Result": {
+      "main": [
+        [
+          {
+            "node": "Check Nonce Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Nonce Error": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Rate Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Rate Limit": {
+      "main": [
+        [
+          {
+            "node": "Verify Rate Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Rate Limit": {
+      "main": [
+        [
+          {
+            "node": "Check Rate Limit Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Rate Limit Error": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Invocation Start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Invocation Start": {
+      "main": [
+        [
+          {
+            "node": "Prepare Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Tool",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Tool": {
+      "main": [
+        [
+          {
+            "node": "Execute Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tool Not Implemented",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tool Not Implemented",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tool Not Implemented",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Audit Log": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Not Implemented": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Invocation End",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    },
+    {
+      "name": "router",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "name": "GaaP MCP Envelope Builders",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Envelope Builders - Request/Response envelope construction\n// =============================================================================\n// Provides standardized envelope building for all MCP tools\n//\n// Input: {\n//   action: 'success' | 'error',\n//   \n//   // For success:\n//   data: { ... },\n//   correlation_id?: string,\n//   audit_event_id?: string,\n//   \n//   // For error:\n//   error_code: string,\n//   error_message: string,\n//   recoverable?: boolean,\n//   suggested_action?: string,\n//   \n//   // Common:\n//   request_id: string,\n//   start_time: number,\n//   gaap_layer: 'L1' | 'L2' | 'L3' | 'L4' | 'MCP',\n//   camdl_anchored?: boolean\n// }\n//\n// Output: Standard GaaP MCP Response Envelope\n// =============================================================================\n\nconst input = $input.first().json;\nconst executionMs = input.start_time ? Date.now() - input.start_time : 0;\n\nif (input.action === 'error') {\n  // Error response\n  return [{\n    json: {\n      success: false,\n      error: {\n        code: input.error_code || 'MCP_UNKNOWN_ERROR',\n        message: input.error_message || 'An unknown error occurred',\n        recoverable: input.recoverable !== undefined ? input.recoverable : false,\n        suggested_action: input.suggested_action || null\n      },\n      meta: {\n        request_id: input.request_id || 'unknown',\n        execution_ms: executionMs,\n        gaap_layer: input.gaap_layer || 'MCP',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Success response\nreturn [{\n  json: {\n    success: true,\n    result: {\n      data: input.data || {},\n      correlation_id: input.correlation_id || null,\n      audit_event_id: input.audit_event_id || null\n    },\n    meta: {\n      request_id: input.request_id || 'unknown',\n      execution_ms: executionMs,\n      gaap_layer: input.gaap_layer || 'MCP',\n      camdl_anchored: input.camdl_anchored || false\n    }\n  }\n}];"
+      },
+      "id": "build-envelope",
+      "name": "Build Envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Envelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    },
+    {
+      "name": "shared",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    }
+  ]
+}

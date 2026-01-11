@@ -1,0 +1,298 @@
+{
+  "name": "GaaP MCP Tool: Audit Log Event",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// gaap_audit_log_event - Log compliance event with optional CamDL anchoring\n// =============================================================================\n// GaaP Layer: L4 (Compliance & Audit)\n//\n// Input params:\n//   event_type: string (required) - e.g., 'order.created', 'payment.captured'\n//   entity_type: string (required) - e.g., 'order', 'payment', 'customer'\n//   entity_id: string (required) - e.g., 'ORD-2025-001'\n//   state_change: object (optional) - { previous: {...}, new: {...} }\n//   previous_hash: string (optional) - Hash of previous event in chain\n//   metadata: object (optional) - Additional context\n//   anchor_to_camdl: boolean (optional) - Request immediate CamDL anchoring\n//\n// Output:\n//   audit_event_id: UUID\n//   correlation_id: string\n//   event_hash: string (SHA-256)\n//   camdl_anchored: boolean\n//   camdl_anchor_id?: string (if anchored)\n// =============================================================================\n\nconst crypto = require('crypto');\n\nconst input = $input.first().json;\nconst startTime = input._startTime || Date.now();\nconst requestId = input.request_id;\nconst tenantId = input.tenant_context?.tenant_id;\nconst correlationId = input.tenant_context?.correlation_id || `CRR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;\n\n// Validate required params\nconst params = input.params || {};\nconst requiredParams = ['event_type', 'entity_type', 'entity_id'];\nconst missingParams = requiredParams.filter(p => !params[p]);\n\nif (missingParams.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L4_AUDIT_MISSING_PARAMS',\n        message: `Missing required parameters: ${missingParams.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L4',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Extract state change info\nconst previousState = params.state_change?.previous || null;\nconst newState = params.state_change?.new || null;\nconst stateChangeSummary = params.state_change \n  ? `${params.event_type}: ${JSON.stringify(Object.keys(params.state_change.new || {}))}`\n  : null;\n\n// Compute event hash (SHA-256)\n// Canonical format: tenant_id|event_type|entity_type|entity_id|new_state|previous_hash|timestamp\nconst eventTimestamp = new Date().toISOString();\nconst canonicalData = [\n  tenantId,\n  params.event_type,\n  params.entity_type,\n  params.entity_id,\n  JSON.stringify(newState || {}),\n  params.previous_hash || '',\n  eventTimestamp\n].join('|');\n\nconst eventHash = crypto.createHash('sha256').update(canonicalData).digest('hex');\n\n// Generate audit event ID\nconst auditEventId = crypto.randomUUID();\n\n// Prepare for database insert\nreturn [{\n  json: {\n    _startTime: startTime,\n    request_id: requestId,\n    tenant_id: tenantId,\n    correlation_id: correlationId,\n    audit_event_id: auditEventId,\n    event_type: params.event_type,\n    entity_type: params.entity_type,\n    entity_id: params.entity_id,\n    previous_state: previousState,\n    new_state: newState,\n    state_change_summary: stateChangeSummary,\n    event_hash: eventHash,\n    previous_hash: params.previous_hash || null,\n    metadata: params.metadata || {},\n    event_timestamp: eventTimestamp,\n    anchor_to_camdl: params.anchor_to_camdl || false,\n    source_tool: 'gaap_audit_log_event',\n    source_workflow: input.meta?.source_workflow || null,\n    source_ip: input.source_ip || null\n  }\n}];"
+      },
+      "id": "prepare-event",
+      "name": "Prepare Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-validation",
+      "name": "Check Validation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Set tenant context for RLS\nSET app.current_tenant_id = '{{ $json.tenant_id }}';\n\n-- Insert audit event\nINSERT INTO gaap_mcp.audit_events (\n  audit_event_id,\n  tenant_id,\n  correlation_id,\n  event_type,\n  entity_type,\n  entity_id,\n  previous_state,\n  new_state,\n  state_change_summary,\n  event_hash,\n  previous_hash,\n  metadata,\n  event_timestamp,\n  source_tool,\n  source_workflow,\n  source_ip\n) VALUES (\n  '{{ $json.audit_event_id }}'::UUID,\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.correlation_id }}',\n  '{{ $json.event_type }}',\n  '{{ $json.entity_type }}',\n  '{{ $json.entity_id }}',\n  {{ $json.previous_state ? \"'\" + JSON.stringify($json.previous_state).replace(/'/g, \"''\") + \"'::JSONB\" : 'NULL' }},\n  {{ $json.new_state ? \"'\" + JSON.stringify($json.new_state).replace(/'/g, \"''\") + \"'::JSONB\" : 'NULL' }},\n  {{ $json.state_change_summary ? \"'\" + $json.state_change_summary.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  '{{ $json.event_hash }}',\n  {{ $json.previous_hash ? \"'\" + $json.previous_hash + \"'\" : 'NULL' }},\n  '{{ JSON.stringify($json.metadata).replace(/'/g, \"''\") }}'::JSONB,\n  '{{ $json.event_timestamp }}'::TIMESTAMPTZ,\n  '{{ $json.source_tool }}',\n  {{ $json.source_workflow ? \"'\" + $json.source_workflow + \"'\" : 'NULL' }},\n  {{ $json.source_ip ? \"'\" + $json.source_ip + \"'::INET\" : 'NULL' }}\n)\nRETURNING audit_event_id, event_hash, recorded_at;",
+        "options": {}
+      },
+      "id": "insert-event",
+      "name": "Insert Event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [660, -100],
+      "credentials": {
+        "postgres": {
+          "id": "gaap-mcp-db",
+          "name": "GaaP MCP Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-anchor",
+              "leftValue": "={{ $('Prepare Event').first().json.anchor_to_camdl }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-anchor-request",
+      "name": "Check Anchor Request",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// CamDL Anchoring (Stub Implementation)\n// =============================================================================\n// In production, this would call the CamDL API:\n// POST https://camdl.gov.kh/api/v1/anchor\n// {\n//   event_hash: string,\n//   event_type: string,\n//   metadata: { tenant_id, entity_ref, timestamp }\n// }\n//\n// Response:\n// {\n//   anchor_id: string,\n//   block_number: number,\n//   tx_hash: string,\n//   merkle_root: string\n// }\n// =============================================================================\n\nconst prepareData = $('Prepare Event').first().json;\nconst insertResult = $('Insert Event').first().json;\n\n// Stub: Generate mock CamDL response\n// In production: Call CamDL API\nconst mockAnchorId = `CAMDL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;\nconst mockBlockNumber = Math.floor(Date.now() / 1000);\nconst mockTxHash = `0x${require('crypto').randomBytes(32).toString('hex')}`;\n\nreturn [{\n  json: {\n    camdl_anchored: true,\n    camdl_anchor_id: mockAnchorId,\n    camdl_block_number: mockBlockNumber,\n    camdl_tx_hash: mockTxHash,\n    audit_event_id: insertResult.audit_event_id,\n    event_hash: insertResult.event_hash,\n    correlation_id: prepareData.correlation_id,\n    _startTime: prepareData._startTime,\n    request_id: prepareData.request_id\n  }\n}];"
+      },
+      "id": "anchor-to-camdl",
+      "name": "Anchor to CamDL (Stub)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, -200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Update audit event with CamDL anchor info\nUPDATE gaap_mcp.audit_events\nSET \n  camdl_anchored = TRUE,\n  camdl_anchor_id = '{{ $json.camdl_anchor_id }}',\n  camdl_block_number = {{ $json.camdl_block_number }},\n  camdl_tx_hash = '{{ $json.camdl_tx_hash }}',\n  camdl_anchored_at = NOW()\nWHERE audit_event_id = '{{ $json.audit_event_id }}'::UUID;",
+        "options": {}
+      },
+      "id": "update-anchor-status",
+      "name": "Update Anchor Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1320, -200],
+      "credentials": {
+        "postgres": {
+          "id": "gaap-mcp-db",
+          "name": "GaaP MCP Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success response (with anchoring)\nconst anchorData = $('Anchor to CamDL (Stub)').first().json;\n\nreturn [{\n  json: {\n    data: {\n      audit_event_id: anchorData.audit_event_id,\n      event_hash: anchorData.event_hash,\n      camdl_anchor_id: anchorData.camdl_anchor_id,\n      camdl_block_number: anchorData.camdl_block_number,\n      camdl_tx_hash: anchorData.camdl_tx_hash\n    },\n    correlation_id: anchorData.correlation_id,\n    audit_event_id: anchorData.audit_event_id,\n    camdl_anchored: true,\n    meta: {\n      request_id: anchorData.request_id,\n      execution_ms: Date.now() - anchorData._startTime,\n      gaap_layer: 'L4',\n      camdl_anchored: true\n    }\n  }\n}];"
+      },
+      "id": "build-anchored-response",
+      "name": "Build Anchored Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, -200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success response (without anchoring)\nconst prepareData = $('Prepare Event').first().json;\nconst insertResult = $('Insert Event').first().json;\n\nreturn [{\n  json: {\n    data: {\n      audit_event_id: insertResult.audit_event_id,\n      event_hash: insertResult.event_hash\n    },\n    correlation_id: prepareData.correlation_id,\n    audit_event_id: insertResult.audit_event_id,\n    camdl_anchored: false,\n    meta: {\n      request_id: prepareData.request_id,\n      execution_ms: Date.now() - prepareData._startTime,\n      gaap_layer: 'L4',\n      camdl_anchored: false\n    }\n  }\n}];"
+      },
+      "id": "build-unanchored-response",
+      "name": "Build Unanchored Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {},
+      "id": "merge-responses",
+      "name": "Merge Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1760, -100]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Event": {
+      "main": [
+        [
+          {
+            "node": "Check Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Validation": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Event": {
+      "main": [
+        [
+          {
+            "node": "Check Anchor Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Anchor Request": {
+      "main": [
+        [
+          {
+            "node": "Anchor to CamDL (Stub)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Unanchored Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anchor to CamDL (Stub)": {
+      "main": [
+        [
+          {
+            "node": "Update Anchor Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Anchor Status": {
+      "main": [
+        [
+          {
+            "node": "Build Anchored Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Anchored Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Unanchored Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    },
+    {
+      "name": "tool",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    },
+    {
+      "name": "L4-compliance",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    }
+  ]
+}

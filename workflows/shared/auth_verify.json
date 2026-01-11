@@ -1,0 +1,59 @@
+{
+  "name": "GaaP MCP Auth Verify Helper",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Auth Verify Helper\n// =============================================================================\n// Standalone HMAC signature verification helper\n// Can be called from any workflow that needs to verify request signatures\n//\n// Input: {\n//   method: 'POST',\n//   path: '/webhook/gaap-mcp/invoke',\n//   timestamp: '1704067200000',\n//   nonce: 'abc123',\n//   body: '{...}',\n//   signature: 'provided-signature',\n//   secret: 'webhook-secret'\n// }\n//\n// Output: {\n//   valid: boolean,\n//   error?: string,\n//   canonical_string: string\n// }\n// =============================================================================\n\nconst crypto = require('crypto');\n\nconst input = $input.first().json;\n\n// Validate required fields\nconst required = ['method', 'path', 'timestamp', 'nonce', 'body', 'signature', 'secret'];\nconst missing = required.filter(f => !input[f]);\n\nif (missing.length > 0) {\n  return [{\n    json: {\n      valid: false,\n      error: `Missing required fields: ${missing.join(', ')}`\n    }\n  }];\n}\n\n// Validate timestamp format\nconst timestamp = parseInt(input.timestamp, 10);\nif (isNaN(timestamp)) {\n  return [{\n    json: {\n      valid: false,\n      error: 'Timestamp must be a valid Unix timestamp in milliseconds'\n    }\n  }];\n}\n\n// Check timestamp freshness (5 minute window)\nconst now = Date.now();\nconst maxAge = 5 * 60 * 1000;\n\nif (timestamp < now - maxAge) {\n  return [{\n    json: {\n      valid: false,\n      error: 'Timestamp is too old (>5 minutes)'\n    }\n  }];\n}\n\nif (timestamp > now + 60000) {\n  return [{\n    json: {\n      valid: false,\n      error: 'Timestamp is in the future'\n    }\n  }];\n}\n\n// Build canonical string\n// Format: METHOD|PATH|TIMESTAMP|NONCE|SHA256(body)\nconst bodyHash = crypto.createHash('sha256').update(input.body).digest('hex');\nconst canonicalString = `${input.method}|${input.path}|${input.timestamp}|${input.nonce}|${bodyHash}`;\n\n// Compute expected signature\nconst expectedSignature = crypto\n  .createHmac('sha256', input.secret)\n  .update(canonicalString)\n  .digest('hex');\n\n// Timing-safe comparison\nconst providedSig = input.signature;\n\nif (providedSig.length !== expectedSignature.length) {\n  return [{\n    json: {\n      valid: false,\n      error: 'Signature length mismatch',\n      canonical_string: canonicalString\n    }\n  }];\n}\n\ntry {\n  const isValid = crypto.timingSafeEqual(\n    Buffer.from(providedSig),\n    Buffer.from(expectedSignature)\n  );\n  \n  return [{\n    json: {\n      valid: isValid,\n      error: isValid ? null : 'Signature verification failed',\n      canonical_string: canonicalString\n    }\n  }];\n} catch (e) {\n  return [{\n    json: {\n      valid: false,\n      error: `Signature comparison error: ${e.message}`,\n      canonical_string: canonicalString\n    }\n  }];\n}"
+      },
+      "id": "verify-signature",
+      "name": "Verify Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Verify Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    },
+    {
+      "name": "shared",
+      "createdAt": "2025-01-11T00:00:00.000Z",
+      "updatedAt": "2025-01-11T00:00:00.000Z"
+    }
+  ]
+}
