@@ -1,0 +1,201 @@
+{
+  "name": "GaaP MCP Tool: KHQR Verify Settlement",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// gaap_khqr_verify_settlement - Verify KHQR payment settlement via Bakong\n// =============================================================================\n// GaaP Layer: L3 (Payments)\n//\n// Input params:\n//   md5: string (required) - MD5 hash from gaap_khqr_generate\n//   txn_ref: string (required) - Transaction reference from gaap_khqr_generate\n//   timeout_ms: number (optional) - Timeout in milliseconds, default: 5000\n//\n// Output:\n//   settled: boolean - Whether payment has been settled\n//   settlement_ref: string - Bakong settlement reference (if settled)\n//   settled_at: string - ISO timestamp of settlement (if settled)\n//   amount: number - Settled amount (if settled)\n//   currency: string - Currency code (if settled)\n//   bakong_ref: string - Bakong transaction reference (if settled)\n// =============================================================================\n\nconst crypto = require('crypto');\n\nconst input = $input.first().json;\nconst startTime = input._startTime || Date.now();\nconst requestId = input.request_id;\nconst tenantId = input.tenant_context?.tenant_id;\nconst correlationId = input.tenant_context?.correlation_id || `CRR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;\n\n// Validate required params\nconst params = input.params || {};\nconst requiredParams = ['md5', 'txn_ref'];\nconst missingParams = requiredParams.filter(p => !params[p]);\n\nif (missingParams.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L3_SETTLEMENT_MISSING_PARAMS',\n        message: `Missing required parameters: ${missingParams.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L3',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Validate MD5 format (32 hex characters)\nconst md5Regex = /^[a-f0-9]{32}$/i;\nif (!md5Regex.test(params.md5)) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L3_SETTLEMENT_INVALID_MD5',\n        message: 'Invalid MD5 hash format. Must be 32 hexadecimal characters.',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L3',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Extract parameters\nconst md5 = params.md5;\nconst txnRef = params.txn_ref;\nconst timeoutMs = params.timeout_ms || 5000;\n\nreturn [{\n  json: {\n    _startTime: startTime,\n    request_id: requestId,\n    tenant_id: tenantId,\n    correlation_id: correlationId,\n    md5: md5,\n    txn_ref: txnRef,\n    timeout_ms: timeoutMs\n  }\n}];"
+      },
+      "id": "validate-params",
+      "name": "Validate Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-validation",
+      "name": "Check Validation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Bakong Settlement Verification (Stub Implementation)\n// =============================================================================\n// In production, this would call the Bakong API:\n// POST https://api-bakong.nbc.org.kh/v1/check_transaction_by_md5\n//\n// Request:\n// {\n//   \"md5\": \"<md5_hash>\"\n// }\n//\n// Response:\n// {\n//   \"responseCode\": 0,\n//   \"responseMessage\": \"Success\",\n//   \"data\": {\n//     \"hash\": \"<md5>\",\n//     \"fromAccountId\": \"customer@bank\",\n//     \"toAccountId\": \"merchant@bank\",\n//     \"currency\": \"USD\",\n//     \"amount\": 25.00,\n//     \"description\": \"Payment for TXN-xxx\",\n//     \"createdDateMs\": 1234567890000,\n//     \"acknowledgedDateMs\": 1234567891000\n//   }\n// }\n//\n// For now, we simulate settlement verification with mock responses.\n// =============================================================================\n\nconst crypto = require('crypto');\nconst input = $input.first().json;\n\n// Simulate Bakong API call\n// In production, this would be an HTTP request to Bakong\n// For demo purposes, we'll simulate based on the MD5 hash\n\n// Simulate settlement check with random outcome for demo\n// In production, this would be the actual Bakong API response\nconst randomOutcome = Math.random();\n\n// For testing: MD5 hashes starting with 'a-f' are settled, others are pending\n// This allows deterministic testing while still being somewhat random\nconst firstChar = input.md5.charAt(0).toLowerCase();\nconst isSettled = ['a', 'b', 'c', 'd', 'e', 'f'].includes(firstChar) || randomOutcome > 0.3;\n\nlet settlementData;\n\nif (isSettled) {\n  // Generate settlement reference\n  const settlementRef = `BKNG-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;\n  const bakongRef = `BK${Date.now()}`;\n  \n  // Simulate amount extraction from transaction\n  // In production, this comes from Bakong API response\n  const simulatedAmount = parseFloat((Math.random() * 100 + 5).toFixed(2));\n  \n  settlementData = {\n    settled: true,\n    settlement_ref: settlementRef,\n    settled_at: new Date().toISOString(),\n    amount: simulatedAmount,\n    currency: 'USD',\n    bakong_ref: bakongRef,\n    from_account: 'customer@aba',\n    to_account: 'merchant@aba',\n    description: `Payment for ${input.txn_ref}`\n  };\n} else {\n  settlementData = {\n    settled: false,\n    settlement_ref: null,\n    settled_at: null,\n    amount: null,\n    currency: null,\n    bakong_ref: null,\n    status: 'pending',\n    message: 'Payment not yet received. Please try again later.'\n  };\n}\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    md5: input.md5,\n    txn_ref: input.txn_ref,\n    settlement: settlementData\n  }\n}];"
+      },
+      "id": "verify-settlement",
+      "name": "Verify Settlement (Bakong)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SET app.current_tenant_id = '{{ $json.tenant_id }}';\n\nINSERT INTO gaap_mcp.tool_invocations (\n  tenant_id,\n  request_id,\n  correlation_id,\n  tool_name,\n  gaap_layer,\n  request_params,\n  status,\n  started_at\n) VALUES (\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.request_id }}',\n  '{{ $json.correlation_id }}',\n  'gaap_khqr_verify_settlement',\n  'L3',\n  '{{ JSON.stringify({md5: $json.md5, txn_ref: $json.txn_ref, settled: $json.settlement.settled}).replace(/'/g, \"''\") }}'::JSONB,\n  'success',\n  NOW()\n)\nRETURNING invocation_id;",
+        "options": {}
+      },
+      "id": "log-invocation",
+      "name": "Log Invocation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [880, 100],
+      "credentials": {
+        "postgres": {
+          "id": "aUYl5Qo5xhAItjGP",
+          "name": "CamFinTech PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success response\nconst settlementData = $('Verify Settlement (Bakong)').first().json;\nconst invocation = $('Log Invocation').first().json;\n\nreturn [{\n  json: {\n    data: settlementData.settlement,\n    correlation_id: settlementData.correlation_id,\n    invocation_id: invocation.invocation_id,\n    meta: {\n      request_id: settlementData.request_id,\n      execution_ms: Date.now() - settlementData._startTime,\n      gaap_layer: 'L3',\n      camdl_anchored: false\n    }\n  }\n}];"
+      },
+      "id": "build-response",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {},
+      "id": "merge-responses",
+      "name": "Merge Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1320, 0]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Params": {
+      "main": [
+        [
+          {
+            "node": "Check Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Validation": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Verify Settlement (Bakong)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Settlement (Bakong)": {
+      "main": [
+        [
+          {
+            "node": "Log Invocation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Invocation": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    },
+    {
+      "name": "tool",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    },
+    {
+      "name": "L3-payments",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    }
+  ]
+}
