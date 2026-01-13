@@ -1,0 +1,28 @@
+{
+  "name": "@camfintech/gaap-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Cambodia GaaP platform - bridges Claude Desktop to GaaP HTTP API",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "gaap-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "CamFinTech",
+  "license": "UNLICENSED",
+  "private": true
+}
