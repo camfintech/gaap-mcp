@@ -1,0 +1,201 @@
+{
+  "name": "GaaP MCP Tool: Policy Publish Intent",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// gaap_policy_publish_intent - CamDX X-Road Intent Publisher\n// =============================================================================\n// GaaP Layer: L2 (Interoperability)\n//\n// Input params:\n//   order_id: string (required) - Unique order identifier\n//   merchant_id: string (required) - Merchant identifier\n//   amount: number (required) - Transaction amount\n//   currency: string (optional) - 'USD' or 'KHR', default: 'USD'\n//   amount_band: string (optional) - A, B, C, or D\n//   identity_level: string (optional) - anonymous, basic, verified, high_assurance\n//   items: array (optional) - Order items\n//   customer_id: string (optional) - Customer identifier\n//   camdigi_key_id: string (optional) - CamDigiKey ID if verified\n//\n// Output:\n//   status: 'success' | 'policy_blocked' | 'queued_for_retry'\n//   correlation_id: string - CamDX correlation ID\n//   intent_id: string - Unique intent identifier\n//   x_road_id: string - X-Road transaction ID\n//   policy_decision: object (if blocked)\n// =============================================================================\n\nconst crypto = require('crypto');\n\nconst input = $input.first().json;\nconst startTime = input._startTime || Date.now();\nconst requestId = input.request_id;\nconst tenantId = input.tenant_context?.tenant_id;\nconst correlationId = input.tenant_context?.correlation_id || `CRR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;\n\n// Validate required params\nconst params = input.params || {};\nconst requiredParams = ['order_id', 'merchant_id', 'amount'];\nconst missingParams = requiredParams.filter(p => !params[p] && params[p] !== 0);\n\nif (missingParams.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L2_INTENT_MISSING_PARAMS',\n        message: `Missing required parameters: ${missingParams.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L2',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Validate amount\nif (typeof params.amount !== 'number' || params.amount < 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L2_INTENT_INVALID_AMOUNT',\n        message: 'Amount must be a non-negative number',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L2',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Extract and default parameters\nconst orderId = params.order_id;\nconst merchantId = params.merchant_id;\nconst amount = params.amount;\nconst currency = params.currency || 'USD';\nconst identityLevel = params.identity_level || 'anonymous';\nconst items = params.items || [];\nconst customerId = params.customer_id || null;\nconst camdigiKeyId = params.camdigi_key_id || null;\n\n// Calculate amount band if not provided\nlet amountBand = params.amount_band;\nif (!amountBand) {\n  const amountUSD = currency === 'KHR' ? amount / 4100 : amount;\n  if (amountUSD <= 10) amountBand = 'A';\n  else if (amountUSD <= 50) amountBand = 'B';\n  else if (amountUSD <= 500) amountBand = 'C';\n  else amountBand = 'D';\n}\n\n// Validate identity level\nconst validIdentityLevels = ['anonymous', 'basic', 'verified', 'high_assurance'];\nif (!validIdentityLevels.includes(identityLevel)) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L2_INTENT_INVALID_IDENTITY_LEVEL',\n        message: `Invalid identity level: ${identityLevel}. Must be one of: ${validIdentityLevels.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L2',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    _startTime: startTime,\n    request_id: requestId,\n    tenant_id: tenantId,\n    correlation_id: correlationId,\n    order_id: orderId,\n    merchant_id: merchantId,\n    amount: amount,\n    currency: currency,\n    amount_band: amountBand,\n    identity_level: identityLevel,\n    items: items,\n    customer_id: customerId,\n    camdigi_key_id: camdigiKeyId\n  }\n}];"
+      },
+      "id": "validate-params",
+      "name": "Validate Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-validation",
+      "name": "Check Validation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// CamDX X-Road Intent Publication (Stub Implementation)\n// =============================================================================\n// In production, this would call the CamDX X-Road API:\n// POST https://xroad.camdx.gov.kh/r1/KH-GOV/COM/CAMDX/paymentintent\n//\n// Request (X-Road SOAP envelope):\n// {\n//   \"header\": {\n//     \"protocolVersion\": \"4.0\",\n//     \"id\": \"<uuid>\",\n//     \"client\": { \"xRoadInstance\": \"KH\", \"memberClass\": \"COM\", ... },\n//     \"service\": { \"serviceCode\": \"publishPaymentIntent\" }\n//   },\n//   \"body\": {\n//     \"intent\": {\n//       \"orderId\": \"...\",\n//       \"merchantId\": \"...\",\n//       \"amount\": 100,\n//       \"currency\": \"USD\",\n//       ...\n//     }\n//   }\n// }\n//\n// Response:\n// {\n//   \"status\": \"ACCEPTED\",\n//   \"intentId\": \"CAMDX-2026-PAY-abc123\",\n//   \"xRoadId\": \"XR-2026-...\"\n// }\n//\n// For now, we simulate X-Road publication with mock responses.\n// =============================================================================\n\nconst crypto = require('crypto');\nconst input = $input.first().json;\n\n// Generate CamDX correlation ID format: CAMDX-{YEAR}-{TYPE}-{RANDOM}\nconst year = new Date().getFullYear();\nconst intentId = `CAMDX-${year}-PAY-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;\nconst xRoadId = `XR-${year}-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;\n\n// Policy matrix for intent publication\n// High-value transactions with low identity may be blocked\nconst policyMatrix = {\n  'A': { 'anonymous': 'allowed', 'basic': 'allowed', 'verified': 'allowed', 'high_assurance': 'allowed' },\n  'B': { 'anonymous': 'allowed', 'basic': 'allowed', 'verified': 'allowed', 'high_assurance': 'allowed' },\n  'C': { 'anonymous': 'blocked', 'basic': 'allowed', 'verified': 'allowed', 'high_assurance': 'allowed' },\n  'D': { 'anonymous': 'blocked', 'basic': 'blocked', 'verified': 'allowed', 'high_assurance': 'allowed' }\n};\n\nconst requiredLevels = {\n  'A': 'anonymous',\n  'B': 'anonymous',\n  'C': 'basic',\n  'D': 'verified'\n};\n\nconst policyDecision = policyMatrix[input.amount_band]?.[input.identity_level] || 'blocked';\nconst requiredLevel = requiredLevels[input.amount_band] || 'verified';\n\nlet intentResult;\n\nif (policyDecision === 'blocked') {\n  // Intent blocked by policy - requires identity step-up\n  intentResult = {\n    status: 'policy_blocked',\n    intent_id: intentId,\n    x_road_id: null,\n    correlation_id: input.correlation_id,\n    policy_decision: {\n      decision: 'blocked',\n      current_identity_level: input.identity_level,\n      required_identity_level: requiredLevel,\n      step_up_instructions: `This transaction requires ${requiredLevel} identity verification before it can be published to CamDX.`,\n      blocking_reason: `Amount band ${input.amount_band} requires at least ${requiredLevel} identity level`\n    },\n    published_at: null\n  };\n} else {\n  // Simulate transient failure for demo (5% chance)\n  const shouldRetry = Math.random() < 0.05;\n  \n  if (shouldRetry) {\n    intentResult = {\n      status: 'queued_for_retry',\n      intent_id: intentId,\n      x_road_id: null,\n      correlation_id: input.correlation_id,\n      policy_decision: null,\n      retry_reason: 'X-Road gateway temporarily unavailable',\n      retry_after_ms: 5000,\n      published_at: null\n    };\n  } else {\n    // Successfully published to CamDX\n    intentResult = {\n      status: 'success',\n      intent_id: intentId,\n      x_road_id: xRoadId,\n      correlation_id: input.correlation_id,\n      policy_decision: {\n        decision: 'allowed',\n        identity_level: input.identity_level,\n        amount_band: input.amount_band\n      },\n      published_at: new Date().toISOString(),\n      x_road_details: {\n        instance: 'KH',\n        member_class: 'COM',\n        member_code: 'CAMDX',\n        service_code: 'publishPaymentIntent',\n        service_version: 'v1'\n      },\n      intent_payload: {\n        order_id: input.order_id,\n        merchant_id: input.merchant_id,\n        amount: input.amount,\n        currency: input.currency,\n        amount_band: input.amount_band,\n        identity_level: input.identity_level,\n        item_count: input.items?.length || 0,\n        customer_id: input.customer_id,\n        has_camdigi_key: !!input.camdigi_key_id\n      }\n    };\n  }\n}\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    intent_result: intentResult\n  }\n}];"
+      },
+      "id": "publish-intent",
+      "name": "Publish Intent (CamDX)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SET app.current_tenant_id = '{{ $json.tenant_id }}';\n\nINSERT INTO gaap_mcp.tool_invocations (\n  tenant_id,\n  request_id,\n  correlation_id,\n  tool_name,\n  gaap_layer,\n  request_params,\n  status,\n  started_at\n) VALUES (\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.request_id }}',\n  '{{ $json.correlation_id }}',\n  'gaap_policy_publish_intent',\n  'L2',\n  '{{ JSON.stringify({intent_id: $json.intent_result.intent_id, status: $json.intent_result.status, x_road_id: $json.intent_result.x_road_id}).replace(/'/g, \"''\") }}'::JSONB,\n  '{{ $json.intent_result.status === \"success\" ? \"success\" : \"failed\" }}',\n  NOW()\n)\nRETURNING invocation_id;",
+        "options": {}
+      },
+      "id": "log-invocation",
+      "name": "Log Invocation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [880, 100],
+      "credentials": {
+        "postgres": {
+          "id": "aUYl5Qo5xhAItjGP",
+          "name": "CamFinTech PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success response\nconst intentData = $('Publish Intent (CamDX)').first().json;\nconst invocation = $('Log Invocation').first().json;\n\nreturn [{\n  json: {\n    data: intentData.intent_result,\n    correlation_id: intentData.correlation_id,\n    invocation_id: invocation.invocation_id,\n    meta: {\n      request_id: intentData.request_id,\n      execution_ms: Date.now() - intentData._startTime,\n      gaap_layer: 'L2',\n      camdl_anchored: false\n    }\n  }\n}];"
+      },
+      "id": "build-response",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {},
+      "id": "merge-responses",
+      "name": "Merge Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1320, 0]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Params": {
+      "main": [
+        [
+          {
+            "node": "Check Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Validation": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Publish Intent (CamDX)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Intent (CamDX)": {
+      "main": [
+        [
+          {
+            "node": "Log Invocation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Invocation": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    },
+    {
+      "name": "tool",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    },
+    {
+      "name": "L2-interoperability",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    }
+  ]
+}
