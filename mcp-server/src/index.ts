@@ -144,8 +144,41 @@ const GAAP_TOOLS = [
       required: ['amount', 'merchant_name', 'account_id'],
     },
   },
+  {
+    name: 'gaap_policy_evaluate',
+    description: 'Evaluate CamDX policy decision based on transaction amount and identity level. Returns whether transaction is allowed, requires identity verification, or is blocked. Use before order creation to check compliance requirements.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        amount: {
+          type: 'number',
+          description: 'Transaction amount to evaluate'
+        },
+        currency: {
+          type: 'string',
+          description: 'Currency code: USD or KHR. Default: USD'
+        },
+        identity_level: {
+          type: 'string',
+          description: 'Current identity verification level: anonymous, basic, verified, or high_assurance. Default: anonymous'
+        },
+        entity_type: {
+          type: 'string',
+          description: 'Type of transaction entity (e.g., order, payment, transfer)'
+        },
+        entity_id: {
+          type: 'string',
+          description: 'Optional entity identifier for audit correlation'
+        },
+        correlation_id: {
+          type: 'string',
+          description: 'Correlation ID for tracing related events'
+        }
+      },
+      required: ['amount'],
+    },
+  },
   // Future tools:
-  // - gaap_policy_evaluate
   // - gaap_identity_verify
 ];
 

@@ -1,0 +1,201 @@
+{
+  "name": "GaaP MCP Tool: Policy Evaluate",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// gaap_policy_evaluate - CamDX Policy Decision Evaluator\n// =============================================================================\n// GaaP Layer: L2 (Interoperability)\n//\n// Input params:\n//   amount: number (required) - Transaction amount to evaluate\n//   currency: string (optional) - 'USD' or 'KHR', default: 'USD'\n//   identity_level: string (optional) - User's identity level, default: 'anonymous'\n//   entity_type: string (optional) - Type of entity (order, payment, transfer)\n//   entity_id: string (optional) - Entity ID for correlation\n//\n// Output:\n//   decision: 'allowed' | 'limited' | 'blocked'\n//   amount_band: 'A' | 'B' | 'C' | 'D'\n//   current_identity_level: string\n//   required_identity_level: string\n//   constraints: object (any applicable limits)\n// =============================================================================\n\nconst crypto = require('crypto');\n\nconst input = $input.first().json;\nconst startTime = input._startTime || Date.now();\nconst requestId = input.request_id;\nconst tenantId = input.tenant_context?.tenant_id;\nconst correlationId = input.tenant_context?.correlation_id || `CRR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;\n\n// Validate required params\nconst params = input.params || {};\n\nif (params.amount === undefined || params.amount === null) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L2_POLICY_MISSING_AMOUNT',\n        message: 'Amount is required for policy evaluation',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L2',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\nif (typeof params.amount !== 'number' || params.amount < 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L2_POLICY_INVALID_AMOUNT',\n        message: 'Amount must be a non-negative number',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L2',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Extract and default parameters\nconst amount = params.amount;\nconst currency = params.currency || 'USD';\nconst identityLevel = params.identity_level || 'anonymous';\nconst entityType = params.entity_type || 'transaction';\nconst entityId = params.entity_id || null;\n\n// Validate identity level\nconst validIdentityLevels = ['anonymous', 'basic', 'verified', 'high_assurance'];\nif (!validIdentityLevels.includes(identityLevel)) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L2_POLICY_INVALID_IDENTITY_LEVEL',\n        message: `Invalid identity level: ${identityLevel}. Must be one of: ${validIdentityLevels.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L2',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    _startTime: startTime,\n    request_id: requestId,\n    tenant_id: tenantId,\n    correlation_id: correlationId,\n    amount: amount,\n    currency: currency,\n    identity_level: identityLevel,\n    entity_type: entityType,\n    entity_id: entityId\n  }\n}];"
+      },
+      "id": "validate-params",
+      "name": "Validate Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-validation",
+      "name": "Check Validation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// CamDX Policy Matrix Evaluation\n// =============================================================================\n// Amount Bands (USD equivalent):\n//   A: ≤$10      - Low value, anonymous allowed\n//   B: $10-$50   - Medium value, basic identity required\n//   C: $50-$500  - High value, verified identity required\n//   D: >$500     - Very high value, high assurance required\n//\n// Identity Levels:\n//   anonymous      - No verification\n//   basic          - Phone/email verified\n//   verified       - CamDigiKey Level 2\n//   high_assurance - CamDigiKey Level 3 + biometric\n//\n// Policy Matrix:\n//   decision = matrix[band][identity_level]\n//   - allowed: Transaction proceeds normally\n//   - limited: Transaction allowed with constraints\n//   - blocked: Transaction requires identity step-up\n// =============================================================================\n\nconst input = $input.first().json;\n\n// Convert KHR to USD for band calculation (approximate rate: 4100 KHR = 1 USD)\nlet amountUSD = input.amount;\nif (input.currency === 'KHR') {\n  amountUSD = input.amount / 4100;\n}\n\n// Determine amount band\nlet amountBand;\nif (amountUSD <= 10) {\n  amountBand = 'A';\n} else if (amountUSD <= 50) {\n  amountBand = 'B';\n} else if (amountUSD <= 500) {\n  amountBand = 'C';\n} else {\n  amountBand = 'D';\n}\n\n// Policy matrix: [band][identity_level] → decision\nconst policyMatrix = {\n  'A': {\n    'anonymous': 'allowed',\n    'basic': 'allowed',\n    'verified': 'allowed',\n    'high_assurance': 'allowed'\n  },\n  'B': {\n    'anonymous': 'limited',\n    'basic': 'allowed',\n    'verified': 'allowed',\n    'high_assurance': 'allowed'\n  },\n  'C': {\n    'anonymous': 'blocked',\n    'basic': 'limited',\n    'verified': 'allowed',\n    'high_assurance': 'allowed'\n  },\n  'D': {\n    'anonymous': 'blocked',\n    'basic': 'blocked',\n    'verified': 'limited',\n    'high_assurance': 'allowed'\n  }\n};\n\n// Required identity level for full access per band\nconst requiredLevels = {\n  'A': 'anonymous',\n  'B': 'basic',\n  'C': 'verified',\n  'D': 'high_assurance'\n};\n\n// Band limits (daily aggregate limits when limited)\nconst bandLimits = {\n  'A': { daily_limit_usd: 50, single_limit_usd: 10 },\n  'B': { daily_limit_usd: 200, single_limit_usd: 50 },\n  'C': { daily_limit_usd: 1000, single_limit_usd: 500 },\n  'D': { daily_limit_usd: 10000, single_limit_usd: 5000 }\n};\n\nconst decision = policyMatrix[amountBand][input.identity_level];\nconst requiredLevel = requiredLevels[amountBand];\n\n// Build constraints if limited\nlet constraints = null;\nif (decision === 'limited') {\n  const limits = bandLimits[amountBand];\n  constraints = {\n    reason: `Identity level '${input.identity_level}' has restrictions for band ${amountBand}`,\n    daily_limit_usd: limits.daily_limit_usd,\n    single_transaction_limit_usd: limits.single_limit_usd,\n    requires_manual_review: amountBand === 'D',\n    upgrade_path: `Upgrade to '${requiredLevel}' for unrestricted access`\n  };\n}\n\n// Build step-up instructions if blocked\nlet stepUpInstructions = null;\nif (decision === 'blocked') {\n  stepUpInstructions = {\n    required_level: requiredLevel,\n    current_level: input.identity_level,\n    verification_options: [\n      requiredLevel === 'basic' ? 'Phone verification' : null,\n      requiredLevel === 'verified' ? 'CamDigiKey Level 2' : null,\n      requiredLevel === 'high_assurance' ? 'CamDigiKey Level 3 with biometric' : null\n    ].filter(Boolean),\n    help_text: `This transaction of ${input.currency} ${input.amount.toFixed(2)} requires ${requiredLevel} identity verification.`\n  };\n}\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    policy_result: {\n      decision: decision,\n      amount_band: amountBand,\n      current_identity_level: input.identity_level,\n      required_identity_level: requiredLevel,\n      amount: input.amount,\n      amount_usd_equivalent: amountUSD,\n      currency: input.currency,\n      entity_type: input.entity_type,\n      entity_id: input.entity_id,\n      constraints: constraints,\n      step_up_instructions: stepUpInstructions,\n      evaluated_at: new Date().toISOString()\n    }\n  }\n}];"
+      },
+      "id": "evaluate-policy",
+      "name": "Evaluate Policy Matrix",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SET app.current_tenant_id = '{{ $json.tenant_id }}';\n\nINSERT INTO gaap_mcp.tool_invocations (\n  tenant_id,\n  request_id,\n  correlation_id,\n  tool_name,\n  gaap_layer,\n  request_params,\n  status,\n  started_at\n) VALUES (\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.request_id }}',\n  '{{ $json.correlation_id }}',\n  'gaap_policy_evaluate',\n  'L2',\n  '{{ JSON.stringify({amount: $json.policy_result.amount, currency: $json.policy_result.currency, identity_level: $json.policy_result.current_identity_level, decision: $json.policy_result.decision}).replace(/'/g, \"''\") }}'::JSONB,\n  'success',\n  NOW()\n)\nRETURNING invocation_id;",
+        "options": {}
+      },
+      "id": "log-invocation",
+      "name": "Log Invocation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [880, 100],
+      "credentials": {
+        "postgres": {
+          "id": "aUYl5Qo5xhAItjGP",
+          "name": "CamFinTech PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success response\nconst policyData = $('Evaluate Policy Matrix').first().json;\nconst invocation = $('Log Invocation').first().json;\n\nreturn [{\n  json: {\n    data: policyData.policy_result,\n    correlation_id: policyData.correlation_id,\n    invocation_id: invocation.invocation_id,\n    meta: {\n      request_id: policyData.request_id,\n      execution_ms: Date.now() - policyData._startTime,\n      gaap_layer: 'L2',\n      camdl_anchored: false\n    }\n  }\n}];"
+      },
+      "id": "build-response",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {},
+      "id": "merge-responses",
+      "name": "Merge Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1320, 0]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Params": {
+      "main": [
+        [
+          {
+            "node": "Check Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Validation": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluate Policy Matrix",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Policy Matrix": {
+      "main": [
+        [
+          {
+            "node": "Log Invocation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Invocation": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    },
+    {
+      "name": "tool",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    },
+    {
+      "name": "L2-interoperability",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    }
+  ]
+}
