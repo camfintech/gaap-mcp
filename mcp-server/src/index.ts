@@ -86,8 +86,65 @@ const GAAP_TOOLS = [
       required: ['event_type', 'entity_type', 'entity_id'],
     },
   },
-  // Future tools will be added here:
-  // - gaap_khqr_generate
+  {
+    name: 'gaap_khqr_generate',
+    description: 'Generate a Cambodia KHQR payment QR code via Bakong. Returns QR data string and MD5 hash for payment verification.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        amount: {
+          type: 'number',
+          description: 'Payment amount. Use 0 for static QR (customer enters amount)'
+        },
+        currency: {
+          type: 'string',
+          description: 'Currency code: USD or KHR. Default: USD'
+        },
+        merchant_name: {
+          type: 'string',
+          description: 'Merchant or recipient name (max 25 characters)'
+        },
+        merchant_city: {
+          type: 'string',
+          description: 'Merchant city. Default: Phnom Penh'
+        },
+        account_id: {
+          type: 'string',
+          description: 'Bakong account ID in format username@bankcode (e.g., merchant@aba)'
+        },
+        merchant_id: {
+          type: 'string',
+          description: 'Merchant ID from acquiring bank (for merchant QR type)'
+        },
+        qr_type: {
+          type: 'string',
+          description: 'QR type: individual (personal) or merchant (business). Default: merchant'
+        },
+        bill_number: {
+          type: 'string',
+          description: 'Bill/invoice reference number (optional)'
+        },
+        store_label: {
+          type: 'string',
+          description: 'Store or branch label (optional)'
+        },
+        terminal_label: {
+          type: 'string',
+          description: 'Terminal/POS label (optional)'
+        },
+        expiry_minutes: {
+          type: 'number',
+          description: 'QR expiry time in minutes. Default: 15'
+        },
+        correlation_id: {
+          type: 'string',
+          description: 'Correlation ID for tracing related events'
+        }
+      },
+      required: ['amount', 'merchant_name', 'account_id'],
+    },
+  },
+  // Future tools:
   // - gaap_policy_evaluate
   // - gaap_identity_verify
 ];

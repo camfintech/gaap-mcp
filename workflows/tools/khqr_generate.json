@@ -1,0 +1,201 @@
+{
+  "name": "GaaP MCP Tool: KHQR Generate",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// gaap_khqr_generate - Generate KHQR payment QR code via Bakong\n// =============================================================================\n// GaaP Layer: L3 (Payments)\n//\n// Input params:\n//   amount: number (required) - Payment amount (0 for static QR)\n//   currency: string (optional) - 'USD' or 'KHR', default: 'USD'\n//   merchant_name: string (required) - Merchant name (max 25 chars)\n//   merchant_city: string (optional) - Default: 'Phnom Penh'\n//   account_id: string (required) - Bakong account (user@bank)\n//   merchant_id: string (optional) - Merchant ID for merchant QR\n//   qr_type: string (optional) - 'individual' or 'merchant', default: 'merchant'\n//   bill_number: string (optional) - Invoice reference\n//   store_label: string (optional) - Store identifier\n//   terminal_label: string (optional) - Terminal identifier\n//   expiry_minutes: number (optional) - QR expiry, default: 15\n//\n// Output:\n//   qr_data: string - KHQR data string\n//   md5: string - MD5 hash for payment verification\n//   expires_at: string - ISO timestamp when QR expires\n// =============================================================================\n\nconst crypto = require('crypto');\n\nconst input = $input.first().json;\nconst startTime = input._startTime || Date.now();\nconst requestId = input.request_id;\nconst tenantId = input.tenant_context?.tenant_id;\nconst correlationId = input.tenant_context?.correlation_id || `CRR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;\n\n// Validate required params\nconst params = input.params || {};\nconst requiredParams = ['amount', 'merchant_name', 'account_id'];\nconst missingParams = requiredParams.filter(p => params[p] === undefined || params[p] === null);\n\nif (missingParams.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L3_KHQR_MISSING_PARAMS',\n        message: `Missing required parameters: ${missingParams.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L3',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Validate amount\nif (typeof params.amount !== 'number' || params.amount < 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L3_KHQR_INVALID_AMOUNT',\n        message: 'Amount must be a non-negative number',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L3',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Validate merchant_name length\nif (params.merchant_name.length > 25) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L3_KHQR_NAME_TOO_LONG',\n        message: 'Merchant name must not exceed 25 characters',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L3',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Extract and default parameters\nconst amount = params.amount;\nconst currency = params.currency || 'USD';\nconst merchantName = params.merchant_name;\nconst merchantCity = params.merchant_city || 'Phnom Penh';\nconst accountId = params.account_id;\nconst merchantId = params.merchant_id || '';\nconst qrType = params.qr_type || 'merchant';\nconst billNumber = params.bill_number || '';\nconst storeLabel = params.store_label || '';\nconst terminalLabel = params.terminal_label || '';\nconst expiryMinutes = params.expiry_minutes || 15;\n\n// Generate transaction reference\nconst txnRef = `TXN-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;\n\nreturn [{\n  json: {\n    _startTime: startTime,\n    request_id: requestId,\n    tenant_id: tenantId,\n    correlation_id: correlationId,\n    amount: amount,\n    currency: currency,\n    merchant_name: merchantName,\n    merchant_city: merchantCity,\n    account_id: accountId,\n    merchant_id: merchantId,\n    qr_type: qrType,\n    bill_number: billNumber,\n    store_label: storeLabel,\n    terminal_label: terminalLabel,\n    expiry_minutes: expiryMinutes,\n    txn_ref: txnRef\n  }\n}];"
+      },
+      "id": "validate-params",
+      "name": "Validate Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-validation",
+      "name": "Check Validation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Bakong KHQR Generation (Stub Implementation)\n// =============================================================================\n// In production, this would call the Bakong API:\n// POST https://api-bakong.nbc.org.kh/v1/generate_khqr_individual\n// or\n// POST https://api-bakong.nbc.org.kh/v1/generate_khqr_merchant\n//\n// For now, we generate a valid KHQR format string locally.\n// KHQR follows EMVCo QR Code Specification for Payment Systems.\n// =============================================================================\n\nconst crypto = require('crypto');\nconst input = $input.first().json;\n\n// Helper: Generate TLV (Tag-Length-Value) string\nfunction tlv(tag, value) {\n  const len = value.length.toString().padStart(2, '0');\n  return tag + len + value;\n}\n\n// KHQR Data Structure (EMVCo format)\n// 00 - Payload Format Indicator\n// 01 - Point of Initiation Method (11=static, 12=dynamic)\n// 29 - Merchant Account Information (Bakong)\n// 52 - Merchant Category Code\n// 53 - Transaction Currency (840=USD, 116=KHR)\n// 54 - Transaction Amount\n// 58 - Country Code\n// 59 - Merchant Name\n// 60 - Merchant City\n// 62 - Additional Data Field Template\n// 63 - CRC (checksum)\n\nconst currencyCode = input.currency === 'KHR' ? '116' : '840';\nconst pointOfInit = input.amount > 0 ? '12' : '11'; // 12=dynamic (has amount), 11=static\n\n// Build Merchant Account Info (Tag 29 for Bakong)\nlet merchantAcctInfo = '';\nmerchantAcctInfo += tlv('00', 'bakong'); // GUI\nmerchantAcctInfo += tlv('01', input.account_id); // Account ID\nif (input.merchant_id) {\n  merchantAcctInfo += tlv('02', input.merchant_id); // Merchant ID\n}\n\n// Build Additional Data (Tag 62)\nlet additionalData = '';\nif (input.bill_number) {\n  additionalData += tlv('01', input.bill_number); // Bill Number\n}\nif (input.store_label) {\n  additionalData += tlv('03', input.store_label); // Store Label\n}\nif (input.terminal_label) {\n  additionalData += tlv('07', input.terminal_label); // Terminal Label\n}\nadditionalData += tlv('05', input.txn_ref); // Reference Label\n\n// Build QR payload (without CRC)\nlet qrPayload = '';\nqrPayload += tlv('00', '01'); // Payload Format Indicator\nqrPayload += tlv('01', pointOfInit); // Point of Initiation\nqrPayload += tlv('29', merchantAcctInfo); // Bakong Merchant Account\nqrPayload += tlv('52', '5999'); // MCC: Miscellaneous\nqrPayload += tlv('53', currencyCode); // Currency\nif (input.amount > 0) {\n  qrPayload += tlv('54', input.amount.toFixed(2)); // Amount\n}\nqrPayload += tlv('58', 'KH'); // Country Code\nqrPayload += tlv('59', input.merchant_name.substring(0, 25)); // Merchant Name\nqrPayload += tlv('60', input.merchant_city.substring(0, 15)); // City\nif (additionalData) {\n  qrPayload += tlv('62', additionalData); // Additional Data\n}\n\n// Calculate CRC-16 (CCITT-FALSE)\nfunction crc16(str) {\n  let crc = 0xFFFF;\n  for (let i = 0; i < str.length; i++) {\n    crc ^= str.charCodeAt(i) << 8;\n    for (let j = 0; j < 8; j++) {\n      if (crc & 0x8000) {\n        crc = (crc << 1) ^ 0x1021;\n      } else {\n        crc <<= 1;\n      }\n      crc &= 0xFFFF;\n    }\n  }\n  return crc.toString(16).toUpperCase().padStart(4, '0');\n}\n\n// Add CRC placeholder and calculate\nconst crcInput = qrPayload + '6304';\nconst crc = crc16(crcInput);\nconst qrData = qrPayload + '6304' + crc;\n\n// Generate MD5 for payment verification\nconst md5Hash = crypto.createHash('md5').update(qrData + Date.now()).digest('hex');\n\n// Calculate expiry\nconst expiresAt = new Date(Date.now() + input.expiry_minutes * 60 * 1000).toISOString();\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    qr_data: qrData,\n    md5: md5Hash,\n    txn_ref: input.txn_ref,\n    amount: input.amount,\n    currency: input.currency,\n    expires_at: expiresAt,\n    qr_type: input.qr_type\n  }\n}];"
+      },
+      "id": "generate-khqr",
+      "name": "Generate KHQR",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Set tenant context for RLS\nSET app.current_tenant_id = '{{ $json.tenant_id }}';\n\n-- Log tool invocation\nINSERT INTO gaap_mcp.tool_invocations (\n  tenant_id,\n  request_id,\n  correlation_id,\n  tool_name,\n  gaap_layer,\n  request_params,\n  status,\n  started_at\n) VALUES (\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.request_id }}',\n  '{{ $json.correlation_id }}',\n  'gaap_khqr_generate',\n  'L3',\n  '{{ JSON.stringify({amount: $json.amount, currency: $json.currency, qr_type: $json.qr_type}).replace(/'/g, \"''\") }}'::JSONB,\n  'success',\n  NOW()\n)\nRETURNING invocation_id;",
+        "options": {}
+      },
+      "id": "log-invocation",
+      "name": "Log Invocation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [880, 100],
+      "credentials": {
+        "postgres": {
+          "id": "gaap-mcp-db",
+          "name": "GaaP MCP Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success response\nconst khqrData = $('Generate KHQR').first().json;\nconst invocation = $('Log Invocation').first().json;\n\nreturn [{\n  json: {\n    data: {\n      qr_data: khqrData.qr_data,\n      md5: khqrData.md5,\n      txn_ref: khqrData.txn_ref,\n      amount: khqrData.amount,\n      currency: khqrData.currency,\n      expires_at: khqrData.expires_at,\n      qr_type: khqrData.qr_type\n    },\n    correlation_id: khqrData.correlation_id,\n    invocation_id: invocation.invocation_id,\n    meta: {\n      request_id: khqrData.request_id,\n      execution_ms: Date.now() - khqrData._startTime,\n      gaap_layer: 'L3',\n      camdl_anchored: false\n    }\n  }\n}];"
+      },
+      "id": "build-response",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {},
+      "id": "merge-responses",
+      "name": "Merge Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1320, 0]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Params": {
+      "main": [
+        [
+          {
+            "node": "Check Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Validation": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate KHQR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate KHQR": {
+      "main": [
+        [
+          {
+            "node": "Log Invocation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Invocation": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    },
+    {
+      "name": "tool",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    },
+    {
+      "name": "L3-payments",
+      "createdAt": "2025-01-13T00:00:00.000Z",
+      "updatedAt": "2025-01-13T00:00:00.000Z"
+    }
+  ]
+}
