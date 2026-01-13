@@ -145,21 +145,44 @@ interface GaaPMCPRequest {
 
 #### `gaap_audit_log_event`
 
-Log a compliance event with optional CamDL blockchain anchoring.
+Log compliance events with optional CamDL blockchain anchoring. Supports both single event and batch mode for bulk anchoring.
 
-**Parameters:**
+**Single Event Mode Parameters:**
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `event_type` | string | Yes | Event type (e.g., `order.created`, `payment.captured`) |
-| `entity_type` | string | Yes | Entity type (e.g., `order`, `payment`, `customer`) |
-| `entity_id` | string | Yes | Entity identifier (e.g., `ORD-2025-001`) |
-| `state_change` | object | No | `{ previous: {...}, new: {...} }` |
-| `previous_hash` | string | No | Hash of previous event in chain |
+| `event_type` | string | Yes* | Event type (e.g., `order.created`, `payment.captured`) |
+| `entity_type` | string | Yes* | Entity type (e.g., `order`, `payment`, `customer`) |
+| `entity_id` | string | Yes* | Entity identifier (e.g., `ORD-2025-001`) |
+| `previous_state` | object | No | State before the change |
+| `new_state` | object | No | State after the change |
 | `metadata` | object | No | Additional context |
 | `anchor_to_camdl` | boolean | No | Request immediate blockchain anchoring |
 
-**Example Request:**
+*Required when `batch_mode` is false or not provided.
+
+**Batch Mode Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `batch_mode` | boolean | Yes | Set to `true` for batch anchoring |
+| `batch_id` | string | Yes | Unique batch identifier (e.g., `BATCH-1234567890`) |
+| `event_count` | number | No | Number of events (for validation) |
+| `events` | array | Yes | Array of event objects to anchor |
+| `anchor_to_camdl` | boolean | No | Anchor batch to blockchain |
+
+**Event Object Schema (for batch mode):**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `event_id` | string | Unique event identifier |
+| `event_type` | string | Event type |
+| `correlation_id` | string | Correlation ID |
+| `event_data` | object | Event data payload |
+| `event_hash` | string | SHA-256 hash of event data |
+| `event_timestamp` | string | ISO timestamp of event |
+
+**Single Event Example:**
 
 ```json
 {
@@ -173,13 +196,10 @@ Log a compliance event with optional CamDL blockchain anchoring.
     "event_type": "order.created",
     "entity_type": "order",
     "entity_id": "ORD-2025-0001",
-    "state_change": {
-      "previous": null,
-      "new": {
-        "status": "pending",
-        "total_amount": 45.00,
-        "currency": "USD"
-      }
+    "new_state": {
+      "status": "pending",
+      "total_amount": 45.00,
+      "currency": "USD"
     },
     "metadata": {
       "customer_id": "CUST-001",
@@ -194,7 +214,56 @@ Log a compliance event with optional CamDL blockchain anchoring.
 }
 ```
 
-**Example Response:**
+**Batch Mode Example:**
+
+```json
+{
+  "tool": "gaap_audit_log_event",
+  "tenant_context": {
+    "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
+    "correlation_id": "BATCH-1704067200000"
+  },
+  "params": {
+    "batch_mode": true,
+    "batch_id": "BATCH-1704067200000",
+    "event_count": 3,
+    "events": [
+      {
+        "event_id": "EVT-001",
+        "event_type": "order.created",
+        "correlation_id": "CRR-001",
+        "event_data": { "order_id": "ORD-001", "amount": 25.00 },
+        "event_hash": "a1b2c3d4...",
+        "event_timestamp": "2025-01-11T10:00:00Z"
+      },
+      {
+        "event_id": "EVT-002",
+        "event_type": "payment.completed",
+        "correlation_id": "CRR-001",
+        "event_data": { "order_id": "ORD-001", "txn_id": "TXN-001" },
+        "event_hash": "e5f6a7b8...",
+        "event_timestamp": "2025-01-11T10:05:00Z"
+      },
+      {
+        "event_id": "EVT-003",
+        "event_type": "order.delivered",
+        "correlation_id": "CRR-001",
+        "event_data": { "order_id": "ORD-001" },
+        "event_hash": "c9d0e1f2...",
+        "event_timestamp": "2025-01-11T10:30:00Z"
+      }
+    ],
+    "anchor_to_camdl": true
+  },
+  "meta": {
+    "request_id": "BATCH-REQ-001",
+    "source_workflow": "G12.09",
+    "idempotency_key": "audit-BATCH-1704067200000"
+  }
+}
+```
+
+**Single Event Response:**
 
 ```json
 {
@@ -213,6 +282,36 @@ Log a compliance event with optional CamDL blockchain anchoring.
   "meta": {
     "request_id": "REQ-2025-001",
     "execution_ms": 127,
+    "gaap_layer": "L4",
+    "camdl_anchored": true
+  }
+}
+```
+
+**Batch Mode Response:**
+
+```json
+{
+  "success": true,
+  "result": {
+    "data": {
+      "batch_id": "BATCH-1704067200000",
+      "events_anchored": 3,
+      "merkle_root": "9a8b7c6d5e4f...",
+      "event_proofs": {
+        "EVT-001": { "merkle_proof": [...], "leaf_index": 0 },
+        "EVT-002": { "merkle_proof": [...], "leaf_index": 1 },
+        "EVT-003": { "merkle_proof": [...], "leaf_index": 2 }
+      },
+      "camdl_anchor_id": "CAMDL-BATCH-1704067200000",
+      "camdl_block_number": 1704067200,
+      "camdl_tx_hash": "0x5678..."
+    },
+    "correlation_id": "BATCH-1704067200000"
+  },
+  "meta": {
+    "request_id": "BATCH-REQ-001",
+    "execution_ms": 892,
     "gaap_layer": "L4",
     "camdl_anchored": true
   }
@@ -468,15 +567,25 @@ const result = await client.auditLogEvent(
 
 ## Changelog
 
+### v1.1.0 (2025-01-13)
+- **`gaap_audit_log_event` batch mode support**
+  - Added `batch_mode`, `batch_id`, `event_count`, `events[]` parameters
+  - Supports bulk anchoring of up to 100 events per batch
+  - Returns merkle root and individual event proofs
+  - Used by G12.09 Audit Trail Anchoring workflow
+- Dynamic validation: single mode requires `event_type/entity_type/entity_id`, batch mode requires `events[]`
+
 ### v1.0.0 (2025-01-11)
 - Initial release
-- `gaap_audit_log_event` tool implemented
+- `gaap_audit_log_event` tool implemented (single event mode)
+- `gaap_khqr_generate` tool implemented
+- `gaap_khqr_verify_settlement` tool implemented
+- `gaap_policy_evaluate` tool implemented
+- `gaap_policy_publish_intent` tool implemented
 - HMAC signature authentication
 - Nonce-based replay protection
 - Rate limiting
 - CamDL anchoring (stub)
 
 ### Planned
-- L3 Payment tools (`gaap_khqr_*`)
-- L2 Policy tools (`gaap_policy_*`)
 - L1 Identity tools (`gaap_identity_*`)

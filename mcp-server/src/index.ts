@@ -46,21 +46,22 @@ const server = new Server(
 const GAAP_TOOLS = [
   {
     name: 'gaap_audit_log_event',
-    description: 'Log a compliance event with optional CamDL blockchain anchoring. Use for audit trails, state changes, and regulatory compliance.',
+    description: 'Log compliance events with optional CamDL blockchain anchoring. Supports single event or batch mode for bulk anchoring. Use for audit trails, state changes, and regulatory compliance.',
     inputSchema: {
       type: 'object' as const,
       properties: {
+        // Single event mode properties
         event_type: {
           type: 'string',
-          description: 'Event type (e.g., order.created, payment.completed, identity.verified)'
+          description: 'Event type (e.g., order.created, payment.completed). Required for single event mode.'
         },
         entity_type: {
           type: 'string',
-          description: 'Entity type being audited (e.g., order, payment, user)'
+          description: 'Entity type being audited (e.g., order, payment, user). Required for single event mode.'
         },
         entity_id: {
           type: 'string',
-          description: 'Unique identifier of the entity'
+          description: 'Unique identifier of the entity. Required for single event mode.'
         },
         previous_state: {
           type: 'object',
@@ -70,9 +71,38 @@ const GAAP_TOOLS = [
           type: 'object',
           description: 'State of the entity after the change'
         },
+        // Batch mode properties
+        batch_mode: {
+          type: 'boolean',
+          description: 'Enable batch mode for bulk event anchoring. When true, use events[] array instead of single event properties.'
+        },
+        batch_id: {
+          type: 'string',
+          description: 'Unique batch identifier (e.g., BATCH-1234567890). Required when batch_mode is true.'
+        },
+        event_count: {
+          type: 'number',
+          description: 'Number of events in the batch. Used for validation.'
+        },
+        events: {
+          type: 'array',
+          description: 'Array of events to anchor in batch mode. Each event should have event_id, event_type, event_data, event_hash, event_timestamp.',
+          items: {
+            type: 'object',
+            properties: {
+              event_id: { type: 'string', description: 'Unique event identifier' },
+              event_type: { type: 'string', description: 'Event type' },
+              correlation_id: { type: 'string', description: 'Correlation ID' },
+              event_data: { type: 'object', description: 'Event data payload' },
+              event_hash: { type: 'string', description: 'SHA-256 hash of event data' },
+              event_timestamp: { type: 'string', description: 'ISO timestamp of event' }
+            }
+          }
+        },
+        // Common properties
         anchor_to_camdl: {
           type: 'boolean',
-          description: 'Whether to anchor this event to CamDL blockchain (default: false)'
+          description: 'Whether to anchor event(s) to CamDL blockchain (default: false)'
         },
         correlation_id: {
           type: 'string',
@@ -80,10 +110,10 @@ const GAAP_TOOLS = [
         },
         metadata: {
           type: 'object',
-          description: 'Additional metadata to store with the event'
+          description: 'Additional metadata to store with the event(s)'
         }
       },
-      required: ['event_type', 'entity_type', 'entity_id'],
+      required: [],  // Validation handled dynamically: single mode needs event_type/entity_type/entity_id, batch mode needs events[]
     },
   },
   {
@@ -285,6 +315,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }],
       isError: true,
     };
+  }
+
+  // Special validation for gaap_audit_log_event (single vs batch mode)
+  if (name === 'gaap_audit_log_event') {
+    const batchMode = args?.batch_mode as boolean;
+    if (batchMode) {
+      // Batch mode: require events array
+      if (!args?.events || !Array.isArray(args.events) || args.events.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: 'Error: batch_mode=true requires non-empty events[] array',
+          }],
+          isError: true,
+        };
+      }
+    } else {
+      // Single event mode: require event_type, entity_type, entity_id
+      if (!args?.event_type || !args?.entity_type || !args?.entity_id) {
+        return {
+          content: [{
+            type: 'text',
+            text: 'Error: Single event mode requires event_type, entity_type, and entity_id. Use batch_mode=true with events[] for bulk operations.',
+          }],
+          isError: true,
+        };
+      }
+    }
   }
 
   // Build correlation ID if not provided
