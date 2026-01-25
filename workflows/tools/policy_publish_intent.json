@@ -50,25 +50,77 @@
     },
     {
       "parameters": {
-        "jsCode": "// =============================================================================\n// CamDX X-Road Intent Publication (Stub Implementation)\n// =============================================================================\n// In production, this would call the CamDX X-Road API:\n// POST https://xroad.camdx.gov.kh/r1/KH-GOV/COM/CAMDX/paymentintent\n//\n// Request (X-Road SOAP envelope):\n// {\n//   \"header\": {\n//     \"protocolVersion\": \"4.0\",\n//     \"id\": \"<uuid>\",\n//     \"client\": { \"xRoadInstance\": \"KH\", \"memberClass\": \"COM\", ... },\n//     \"service\": { \"serviceCode\": \"publishPaymentIntent\" }\n//   },\n//   \"body\": {\n//     \"intent\": {\n//       \"orderId\": \"...\",\n//       \"merchantId\": \"...\",\n//       \"amount\": 100,\n//       \"currency\": \"USD\",\n//       ...\n//     }\n//   }\n// }\n//\n// Response:\n// {\n//   \"status\": \"ACCEPTED\",\n//   \"intentId\": \"CAMDX-2026-PAY-abc123\",\n//   \"xRoadId\": \"XR-2026-...\"\n// }\n//\n// For now, we simulate X-Road publication with mock responses.\n// =============================================================================\n\nconst crypto = require('crypto');\nconst input = $input.first().json;\n\n// Generate CamDX correlation ID format: CAMDX-{YEAR}-{TYPE}-{RANDOM}\nconst year = new Date().getFullYear();\nconst intentId = `CAMDX-${year}-PAY-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;\nconst xRoadId = `XR-${year}-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;\n\n// Policy matrix for intent publication\n// High-value transactions with low identity may be blocked\nconst policyMatrix = {\n  'A': { 'anonymous': 'allowed', 'basic': 'allowed', 'verified': 'allowed', 'high_assurance': 'allowed' },\n  'B': { 'anonymous': 'allowed', 'basic': 'allowed', 'verified': 'allowed', 'high_assurance': 'allowed' },\n  'C': { 'anonymous': 'blocked', 'basic': 'allowed', 'verified': 'allowed', 'high_assurance': 'allowed' },\n  'D': { 'anonymous': 'blocked', 'basic': 'blocked', 'verified': 'allowed', 'high_assurance': 'allowed' }\n};\n\nconst requiredLevels = {\n  'A': 'anonymous',\n  'B': 'anonymous',\n  'C': 'basic',\n  'D': 'verified'\n};\n\nconst policyDecision = policyMatrix[input.amount_band]?.[input.identity_level] || 'blocked';\nconst requiredLevel = requiredLevels[input.amount_band] || 'verified';\n\nlet intentResult;\n\nif (policyDecision === 'blocked') {\n  // Intent blocked by policy - requires identity step-up\n  intentResult = {\n    status: 'policy_blocked',\n    intent_id: intentId,\n    x_road_id: null,\n    correlation_id: input.correlation_id,\n    policy_decision: {\n      decision: 'blocked',\n      current_identity_level: input.identity_level,\n      required_identity_level: requiredLevel,\n      step_up_instructions: `This transaction requires ${requiredLevel} identity verification before it can be published to CamDX.`,\n      blocking_reason: `Amount band ${input.amount_band} requires at least ${requiredLevel} identity level`\n    },\n    published_at: null\n  };\n} else {\n  // Simulate transient failure for demo (5% chance)\n  const shouldRetry = Math.random() < 0.05;\n  \n  if (shouldRetry) {\n    intentResult = {\n      status: 'queued_for_retry',\n      intent_id: intentId,\n      x_road_id: null,\n      correlation_id: input.correlation_id,\n      policy_decision: null,\n      retry_reason: 'X-Road gateway temporarily unavailable',\n      retry_after_ms: 5000,\n      published_at: null\n    };\n  } else {\n    // Successfully published to CamDX\n    intentResult = {\n      status: 'success',\n      intent_id: intentId,\n      x_road_id: xRoadId,\n      correlation_id: input.correlation_id,\n      policy_decision: {\n        decision: 'allowed',\n        identity_level: input.identity_level,\n        amount_band: input.amount_band\n      },\n      published_at: new Date().toISOString(),\n      x_road_details: {\n        instance: 'KH',\n        member_class: 'COM',\n        member_code: 'CAMDX',\n        service_code: 'publishPaymentIntent',\n        service_version: 'v1'\n      },\n      intent_payload: {\n        order_id: input.order_id,\n        merchant_id: input.merchant_id,\n        amount: input.amount,\n        currency: input.currency,\n        amount_band: input.amount_band,\n        identity_level: input.identity_level,\n        item_count: input.items?.length || 0,\n        customer_id: input.customer_id,\n        has_camdigi_key: !!input.camdigi_key_id\n      }\n    };\n  }\n}\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    intent_result: intentResult\n  }\n}];"
+        "method": "POST",
+        "url": "https://lg99tn8y8g.execute-api.ap-southeast-1.amazonaws.com/v1/camdx/exchange",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $json.correlation_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"exchange_type\": \"payment_intent\",\n  \"source_participant\": \"{{ $json.tenant_id }}\",\n  \"target_participant\": \"bakong\",\n  \"consent_id\": null,\n  \"payload\": {\n    \"order_id\": \"{{ $json.order_id }}\",\n    \"merchant_id\": \"{{ $json.merchant_id }}\",\n    \"amount\": {{ $json.amount }},\n    \"currency\": \"{{ $json.currency }}\",\n    \"amount_band\": \"{{ $json.amount_band }}\",\n    \"identity_level\": \"{{ $json.identity_level }}\",\n    \"item_count\": {{ $json.items.length || 0 }},\n    \"customer_id\": {{ $json.customer_id ? '\"' + $json.customer_id + '\"' : 'null' }},\n    \"has_camdigi_key\": {{ !!$json.camdigi_key_id }}\n  }\n}",
+        "options": {
+          "timeout": 15000
+        }
       },
-      "id": "publish-intent",
-      "name": "Publish Intent (CamDX)",
+      "id": "call-aws-camdx-exchange",
+      "name": "Call AWS CamDX Exchange",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 100],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Map AWS CamDX Exchange Response\n// =============================================================================\nconst crypto = require('crypto');\nconst input = $('Validate Params').first().json;\nconst awsResponse = $input.first().json;\n\n// Generate CamDX correlation ID format: CAMDX-{YEAR}-{TYPE}-{RANDOM}\nconst year = new Date().getFullYear();\nconst intentId = awsResponse.intent_id || awsResponse.exchange_id || `CAMDX-${year}-PAY-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;\nconst xRoadId = awsResponse.x_road_id || `XR-${year}-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;\n\n// Map status from AWS response\nlet status = 'success';\nlet policyDecision = null;\n\nif (awsResponse.status === 'blocked' || awsResponse.status === 'policy_blocked') {\n  status = 'policy_blocked';\n  policyDecision = awsResponse.policy_decision || {\n    decision: 'blocked',\n    current_identity_level: input.identity_level,\n    required_identity_level: awsResponse.required_level || 'verified',\n    blocking_reason: awsResponse.reason || `Amount band ${input.amount_band} requires higher identity level`\n  };\n} else if (awsResponse.status === 'queued' || awsResponse.status === 'queued_for_retry') {\n  status = 'queued_for_retry';\n} else {\n  policyDecision = {\n    decision: 'allowed',\n    identity_level: input.identity_level,\n    amount_band: input.amount_band\n  };\n}\n\nconst intentResult = {\n  status: status,\n  intent_id: intentId,\n  x_road_id: status === 'success' ? xRoadId : null,\n  correlation_id: input.correlation_id,\n  policy_decision: policyDecision,\n  published_at: status === 'success' ? (awsResponse.published_at || new Date().toISOString()) : null,\n  x_road_details: status === 'success' ? {\n    instance: 'KH',\n    member_class: 'COM',\n    member_code: 'CAMDX',\n    service_code: 'publishPaymentIntent',\n    service_version: 'v1'\n  } : null,\n  intent_payload: {\n    order_id: input.order_id,\n    merchant_id: input.merchant_id,\n    amount: input.amount,\n    currency: input.currency,\n    amount_band: input.amount_band,\n    identity_level: input.identity_level,\n    item_count: input.items?.length || 0,\n    customer_id: input.customer_id,\n    has_camdigi_key: !!input.camdigi_key_id\n  }\n};\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    intent_result: intentResult,\n    _aws_endpoint: true\n  }\n}];"
+      },
+      "id": "map-aws-response",
+      "name": "Map AWS Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 100]
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// CamDX X-Road Intent Publication (Local Fallback)\n// =============================================================================\n// Used when AWS endpoint fails or is disabled.\n// =============================================================================\n\nconst crypto = require('crypto');\nconst input = $('Validate Params').first().json;\n\n// Generate CamDX correlation ID format: CAMDX-{YEAR}-{TYPE}-{RANDOM}\nconst year = new Date().getFullYear();\nconst intentId = `CAMDX-${year}-PAY-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;\nconst xRoadId = `XR-${year}-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;\n\n// Policy matrix for intent publication\n// High-value transactions with low identity may be blocked\nconst policyMatrix = {\n  'A': { 'anonymous': 'allowed', 'basic': 'allowed', 'verified': 'allowed', 'high_assurance': 'allowed' },\n  'B': { 'anonymous': 'allowed', 'basic': 'allowed', 'verified': 'allowed', 'high_assurance': 'allowed' },\n  'C': { 'anonymous': 'blocked', 'basic': 'allowed', 'verified': 'allowed', 'high_assurance': 'allowed' },\n  'D': { 'anonymous': 'blocked', 'basic': 'blocked', 'verified': 'allowed', 'high_assurance': 'allowed' }\n};\n\nconst requiredLevels = {\n  'A': 'anonymous',\n  'B': 'anonymous',\n  'C': 'basic',\n  'D': 'verified'\n};\n\nconst policyDecision = policyMatrix[input.amount_band]?.[input.identity_level] || 'blocked';\nconst requiredLevel = requiredLevels[input.amount_band] || 'verified';\n\nlet intentResult;\n\nif (policyDecision === 'blocked') {\n  // Intent blocked by policy - requires identity step-up\n  intentResult = {\n    status: 'policy_blocked',\n    intent_id: intentId,\n    x_road_id: null,\n    correlation_id: input.correlation_id,\n    policy_decision: {\n      decision: 'blocked',\n      current_identity_level: input.identity_level,\n      required_identity_level: requiredLevel,\n      step_up_instructions: `This transaction requires ${requiredLevel} identity verification before it can be published to CamDX.`,\n      blocking_reason: `Amount band ${input.amount_band} requires at least ${requiredLevel} identity level`\n    },\n    published_at: null\n  };\n} else {\n  // Successfully published to CamDX\n  intentResult = {\n    status: 'success',\n    intent_id: intentId,\n    x_road_id: xRoadId,\n    correlation_id: input.correlation_id,\n    policy_decision: {\n      decision: 'allowed',\n      identity_level: input.identity_level,\n      amount_band: input.amount_band\n    },\n    published_at: new Date().toISOString(),\n    x_road_details: {\n      instance: 'KH',\n      member_class: 'COM',\n      member_code: 'CAMDX',\n      service_code: 'publishPaymentIntent',\n      service_version: 'v1'\n    },\n    intent_payload: {\n      order_id: input.order_id,\n      merchant_id: input.merchant_id,\n      amount: input.amount,\n      currency: input.currency,\n      amount_band: input.amount_band,\n      identity_level: input.identity_level,\n      item_count: input.items?.length || 0,\n      customer_id: input.customer_id,\n      has_camdigi_key: !!input.camdigi_key_id\n    }\n  };\n}\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    intent_result: intentResult,\n    _fallback: true\n  }\n}];"
+      },
+      "id": "publish-intent-fallback",
+      "name": "Publish Intent (Fallback)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "extra"
+      },
+      "id": "merge-intent-result",
+      "name": "Merge Intent Result",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1100, 100]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SET app.current_tenant_id = '{{ $json.tenant_id }}';\n\nINSERT INTO gaap_mcp.tool_invocations (\n  tenant_id,\n  request_id,\n  correlation_id,\n  tool_name,\n  gaap_layer,\n  request_params,\n  status,\n  started_at\n) VALUES (\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.request_id }}',\n  '{{ $json.correlation_id }}',\n  'gaap_policy_publish_intent',\n  'L2',\n  '{{ JSON.stringify({intent_id: $json.intent_result.intent_id, status: $json.intent_result.status, x_road_id: $json.intent_result.x_road_id}).replace(/'/g, \"''\") }}'::JSONB,\n  '{{ $json.intent_result.status === \"success\" ? \"success\" : \"failed\" }}',\n  NOW()\n)\nRETURNING invocation_id;",
+        "query": "SET app.current_tenant_id = '{{ $json.tenant_id }}';\n\nINSERT INTO gaap_mcp.tool_invocations (\n  tenant_id,\n  request_id,\n  correlation_id,\n  tool_name,\n  gaap_layer,\n  request_params,\n  status,\n  started_at\n) VALUES (\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.request_id }}',\n  '{{ $json.correlation_id }}',\n  'gaap_policy_publish_intent',\n  'L2',\n  '{{ JSON.stringify({intent_id: $json.intent_result.intent_id, status: $json.intent_result.status, x_road_id: $json.intent_result.x_road_id, aws_endpoint: $json._aws_endpoint || false}).replace(/'/g, \"''\") }}'::JSONB,\n  '{{ $json.intent_result.status === \"success\" ? \"success\" : \"failed\" }}',\n  NOW()\n)\nRETURNING invocation_id;",
         "options": {}
       },
       "id": "log-invocation",
       "name": "Log Invocation",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [880, 100],
+      "position": [1320, 100],
       "credentials": {
         "postgres": {
           "id": "aUYl5Qo5xhAItjGP",
@@ -78,13 +130,13 @@
     },
     {
       "parameters": {
-        "jsCode": "// Build success response\nconst intentData = $('Publish Intent (CamDX)').first().json;\nconst invocation = $('Log Invocation').first().json;\n\nreturn [{\n  json: {\n    data: intentData.intent_result,\n    correlation_id: intentData.correlation_id,\n    invocation_id: invocation.invocation_id,\n    meta: {\n      request_id: intentData.request_id,\n      execution_ms: Date.now() - intentData._startTime,\n      gaap_layer: 'L2',\n      camdl_anchored: false\n    }\n  }\n}];"
+        "jsCode": "// Build success response\nconst intentData = $('Merge Intent Result').first().json;\nconst invocation = $('Log Invocation').first().json;\n\nreturn [{\n  json: {\n    data: intentData.intent_result,\n    correlation_id: intentData.correlation_id,\n    invocation_id: invocation.invocation_id,\n    meta: {\n      request_id: intentData.request_id,\n      execution_ms: Date.now() - intentData._startTime,\n      gaap_layer: 'L2',\n      camdl_anchored: false,\n      aws_endpoint: intentData._aws_endpoint || false,\n      fallback_used: intentData._fallback || false\n    }\n  }\n}];"
       },
       "id": "build-response",
       "name": "Build Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1100, 100]
+      "position": [1540, 100]
     },
     {
       "parameters": {},
@@ -92,7 +144,7 @@
       "name": "Merge Responses",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
-      "position": [1320, 0]
+      "position": [1760, 0]
     }
   ],
   "connections": {
@@ -129,14 +181,54 @@
         ],
         [
           {
-            "node": "Publish Intent (CamDX)",
+            "node": "Call AWS CamDX Exchange",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Publish Intent (CamDX)": {
+    "Call AWS CamDX Exchange": {
+      "main": [
+        [
+          {
+            "node": "Map AWS Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Publish Intent (Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map AWS Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Intent Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Intent (Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Merge Intent Result",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Intent Result": {
       "main": [
         [
           {

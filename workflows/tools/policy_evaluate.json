@@ -50,25 +50,77 @@
     },
     {
       "parameters": {
-        "jsCode": "// =============================================================================\n// CamDX Policy Matrix Evaluation\n// =============================================================================\n// Amount Bands (USD equivalent):\n//   A: ≤$10      - Low value, anonymous allowed\n//   B: $10-$50   - Medium value, basic identity required\n//   C: $50-$500  - High value, verified identity required\n//   D: >$500     - Very high value, high assurance required\n//\n// Identity Levels:\n//   anonymous      - No verification\n//   basic          - Phone/email verified\n//   verified       - CamDigiKey Level 2\n//   high_assurance - CamDigiKey Level 3 + biometric\n//\n// Policy Matrix:\n//   decision = matrix[band][identity_level]\n//   - allowed: Transaction proceeds normally\n//   - limited: Transaction allowed with constraints\n//   - blocked: Transaction requires identity step-up\n// =============================================================================\n\nconst input = $input.first().json;\n\n// Convert KHR to USD for band calculation (approximate rate: 4100 KHR = 1 USD)\nlet amountUSD = input.amount;\nif (input.currency === 'KHR') {\n  amountUSD = input.amount / 4100;\n}\n\n// Determine amount band\nlet amountBand;\nif (amountUSD <= 10) {\n  amountBand = 'A';\n} else if (amountUSD <= 50) {\n  amountBand = 'B';\n} else if (amountUSD <= 500) {\n  amountBand = 'C';\n} else {\n  amountBand = 'D';\n}\n\n// Policy matrix: [band][identity_level] → decision\nconst policyMatrix = {\n  'A': {\n    'anonymous': 'allowed',\n    'basic': 'allowed',\n    'verified': 'allowed',\n    'high_assurance': 'allowed'\n  },\n  'B': {\n    'anonymous': 'limited',\n    'basic': 'allowed',\n    'verified': 'allowed',\n    'high_assurance': 'allowed'\n  },\n  'C': {\n    'anonymous': 'blocked',\n    'basic': 'limited',\n    'verified': 'allowed',\n    'high_assurance': 'allowed'\n  },\n  'D': {\n    'anonymous': 'blocked',\n    'basic': 'blocked',\n    'verified': 'limited',\n    'high_assurance': 'allowed'\n  }\n};\n\n// Required identity level for full access per band\nconst requiredLevels = {\n  'A': 'anonymous',\n  'B': 'basic',\n  'C': 'verified',\n  'D': 'high_assurance'\n};\n\n// Band limits (daily aggregate limits when limited)\nconst bandLimits = {\n  'A': { daily_limit_usd: 50, single_limit_usd: 10 },\n  'B': { daily_limit_usd: 200, single_limit_usd: 50 },\n  'C': { daily_limit_usd: 1000, single_limit_usd: 500 },\n  'D': { daily_limit_usd: 10000, single_limit_usd: 5000 }\n};\n\nconst decision = policyMatrix[amountBand][input.identity_level];\nconst requiredLevel = requiredLevels[amountBand];\n\n// Build constraints if limited\nlet constraints = null;\nif (decision === 'limited') {\n  const limits = bandLimits[amountBand];\n  constraints = {\n    reason: `Identity level '${input.identity_level}' has restrictions for band ${amountBand}`,\n    daily_limit_usd: limits.daily_limit_usd,\n    single_transaction_limit_usd: limits.single_limit_usd,\n    requires_manual_review: amountBand === 'D',\n    upgrade_path: `Upgrade to '${requiredLevel}' for unrestricted access`\n  };\n}\n\n// Build step-up instructions if blocked\nlet stepUpInstructions = null;\nif (decision === 'blocked') {\n  stepUpInstructions = {\n    required_level: requiredLevel,\n    current_level: input.identity_level,\n    verification_options: [\n      requiredLevel === 'basic' ? 'Phone verification' : null,\n      requiredLevel === 'verified' ? 'CamDigiKey Level 2' : null,\n      requiredLevel === 'high_assurance' ? 'CamDigiKey Level 3 with biometric' : null\n    ].filter(Boolean),\n    help_text: `This transaction of ${input.currency} ${input.amount.toFixed(2)} requires ${requiredLevel} identity verification.`\n  };\n}\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    policy_result: {\n      decision: decision,\n      amount_band: amountBand,\n      current_identity_level: input.identity_level,\n      required_identity_level: requiredLevel,\n      amount: input.amount,\n      amount_usd_equivalent: amountUSD,\n      currency: input.currency,\n      entity_type: input.entity_type,\n      entity_id: input.entity_id,\n      constraints: constraints,\n      step_up_instructions: stepUpInstructions,\n      evaluated_at: new Date().toISOString()\n    }\n  }\n}];"
+        "method": "POST",
+        "url": "https://lg99tn8y8g.execute-api.ap-southeast-1.amazonaws.com/v1/camdx/consent/verify",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $json.correlation_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"consent_type\": \"transaction\",\n  \"subject_id\": \"{{ $json.tenant_id }}\",\n  \"amount\": {{ $json.amount }},\n  \"currency\": \"{{ $json.currency }}\",\n  \"identity_level\": \"{{ $json.identity_level }}\",\n  \"entity_type\": \"{{ $json.entity_type }}\",\n  \"entity_id\": {{ $json.entity_id ? '\"' + $json.entity_id + '\"' : 'null' }}\n}",
+        "options": {
+          "timeout": 15000
+        }
       },
-      "id": "evaluate-policy",
-      "name": "Evaluate Policy Matrix",
+      "id": "call-aws-camdx",
+      "name": "Call AWS CamDX Verify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 100],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Map AWS CamDX Response\n// =============================================================================\nconst input = $('Validate Params').first().json;\nconst awsResponse = $input.first().json;\n\n// Map AWS response to expected format\nconst decision = awsResponse.decision || awsResponse.consent_decision || 'allowed';\nconst amountBand = awsResponse.amount_band || awsResponse.band || 'A';\nconst requiredLevel = awsResponse.required_identity_level || awsResponse.required_level || 'anonymous';\n\n// Convert KHR to USD for display\nlet amountUSD = input.amount;\nif (input.currency === 'KHR') {\n  amountUSD = input.amount / 4100;\n}\n\n// Build constraints if limited\nlet constraints = null;\nif (decision === 'limited' && awsResponse.constraints) {\n  constraints = awsResponse.constraints;\n} else if (decision === 'limited') {\n  constraints = {\n    reason: `Identity level '${input.identity_level}' has restrictions for band ${amountBand}`,\n    upgrade_path: `Upgrade to '${requiredLevel}' for unrestricted access`\n  };\n}\n\n// Build step-up instructions if blocked\nlet stepUpInstructions = null;\nif (decision === 'blocked') {\n  stepUpInstructions = awsResponse.step_up_instructions || {\n    required_level: requiredLevel,\n    current_level: input.identity_level,\n    verification_options: [\n      requiredLevel === 'basic' ? 'Phone verification' : null,\n      requiredLevel === 'verified' ? 'CamDigiKey Level 2' : null,\n      requiredLevel === 'high_assurance' ? 'CamDigiKey Level 3 with biometric' : null\n    ].filter(Boolean),\n    help_text: `This transaction of ${input.currency} ${input.amount.toFixed(2)} requires ${requiredLevel} identity verification.`\n  };\n}\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    policy_result: {\n      decision: decision,\n      amount_band: amountBand,\n      current_identity_level: input.identity_level,\n      required_identity_level: requiredLevel,\n      amount: input.amount,\n      amount_usd_equivalent: amountUSD,\n      currency: input.currency,\n      entity_type: input.entity_type,\n      entity_id: input.entity_id,\n      constraints: constraints,\n      step_up_instructions: stepUpInstructions,\n      evaluated_at: awsResponse.evaluated_at || new Date().toISOString()\n    },\n    _aws_endpoint: true\n  }\n}];"
+      },
+      "id": "map-aws-response",
+      "name": "Map AWS Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 100]
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// CamDX Policy Matrix Evaluation (Local Fallback)\n// =============================================================================\n// Used when AWS endpoint fails or is disabled.\n// =============================================================================\n\nconst input = $('Validate Params').first().json;\n\n// Convert KHR to USD for band calculation (approximate rate: 4100 KHR = 1 USD)\nlet amountUSD = input.amount;\nif (input.currency === 'KHR') {\n  amountUSD = input.amount / 4100;\n}\n\n// Determine amount band\nlet amountBand;\nif (amountUSD <= 10) {\n  amountBand = 'A';\n} else if (amountUSD <= 50) {\n  amountBand = 'B';\n} else if (amountUSD <= 500) {\n  amountBand = 'C';\n} else {\n  amountBand = 'D';\n}\n\n// Policy matrix: [band][identity_level] → decision\nconst policyMatrix = {\n  'A': {\n    'anonymous': 'allowed',\n    'basic': 'allowed',\n    'verified': 'allowed',\n    'high_assurance': 'allowed'\n  },\n  'B': {\n    'anonymous': 'limited',\n    'basic': 'allowed',\n    'verified': 'allowed',\n    'high_assurance': 'allowed'\n  },\n  'C': {\n    'anonymous': 'blocked',\n    'basic': 'limited',\n    'verified': 'allowed',\n    'high_assurance': 'allowed'\n  },\n  'D': {\n    'anonymous': 'blocked',\n    'basic': 'blocked',\n    'verified': 'limited',\n    'high_assurance': 'allowed'\n  }\n};\n\n// Required identity level for full access per band\nconst requiredLevels = {\n  'A': 'anonymous',\n  'B': 'basic',\n  'C': 'verified',\n  'D': 'high_assurance'\n};\n\n// Band limits (daily aggregate limits when limited)\nconst bandLimits = {\n  'A': { daily_limit_usd: 50, single_limit_usd: 10 },\n  'B': { daily_limit_usd: 200, single_limit_usd: 50 },\n  'C': { daily_limit_usd: 1000, single_limit_usd: 500 },\n  'D': { daily_limit_usd: 10000, single_limit_usd: 5000 }\n};\n\nconst decision = policyMatrix[amountBand][input.identity_level];\nconst requiredLevel = requiredLevels[amountBand];\n\n// Build constraints if limited\nlet constraints = null;\nif (decision === 'limited') {\n  const limits = bandLimits[amountBand];\n  constraints = {\n    reason: `Identity level '${input.identity_level}' has restrictions for band ${amountBand}`,\n    daily_limit_usd: limits.daily_limit_usd,\n    single_transaction_limit_usd: limits.single_limit_usd,\n    requires_manual_review: amountBand === 'D',\n    upgrade_path: `Upgrade to '${requiredLevel}' for unrestricted access`\n  };\n}\n\n// Build step-up instructions if blocked\nlet stepUpInstructions = null;\nif (decision === 'blocked') {\n  stepUpInstructions = {\n    required_level: requiredLevel,\n    current_level: input.identity_level,\n    verification_options: [\n      requiredLevel === 'basic' ? 'Phone verification' : null,\n      requiredLevel === 'verified' ? 'CamDigiKey Level 2' : null,\n      requiredLevel === 'high_assurance' ? 'CamDigiKey Level 3 with biometric' : null\n    ].filter(Boolean),\n    help_text: `This transaction of ${input.currency} ${input.amount.toFixed(2)} requires ${requiredLevel} identity verification.`\n  };\n}\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    policy_result: {\n      decision: decision,\n      amount_band: amountBand,\n      current_identity_level: input.identity_level,\n      required_identity_level: requiredLevel,\n      amount: input.amount,\n      amount_usd_equivalent: amountUSD,\n      currency: input.currency,\n      entity_type: input.entity_type,\n      entity_id: input.entity_id,\n      constraints: constraints,\n      step_up_instructions: stepUpInstructions,\n      evaluated_at: new Date().toISOString()\n    },\n    _fallback: true\n  }\n}];"
+      },
+      "id": "evaluate-policy-fallback",
+      "name": "Evaluate Policy (Fallback)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "extra"
+      },
+      "id": "merge-policy-result",
+      "name": "Merge Policy Result",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1100, 100]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SET app.current_tenant_id = '{{ $json.tenant_id }}';\n\nINSERT INTO gaap_mcp.tool_invocations (\n  tenant_id,\n  request_id,\n  correlation_id,\n  tool_name,\n  gaap_layer,\n  request_params,\n  status,\n  started_at\n) VALUES (\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.request_id }}',\n  '{{ $json.correlation_id }}',\n  'gaap_policy_evaluate',\n  'L2',\n  '{{ JSON.stringify({amount: $json.policy_result.amount, currency: $json.policy_result.currency, identity_level: $json.policy_result.current_identity_level, decision: $json.policy_result.decision}).replace(/'/g, \"''\") }}'::JSONB,\n  'success',\n  NOW()\n)\nRETURNING invocation_id;",
+        "query": "SET app.current_tenant_id = '{{ $json.tenant_id }}';\n\nINSERT INTO gaap_mcp.tool_invocations (\n  tenant_id,\n  request_id,\n  correlation_id,\n  tool_name,\n  gaap_layer,\n  request_params,\n  status,\n  started_at\n) VALUES (\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.request_id }}',\n  '{{ $json.correlation_id }}',\n  'gaap_policy_evaluate',\n  'L2',\n  '{{ JSON.stringify({amount: $json.policy_result.amount, currency: $json.policy_result.currency, identity_level: $json.policy_result.current_identity_level, decision: $json.policy_result.decision, aws_endpoint: $json._aws_endpoint || false}).replace(/'/g, \"''\") }}'::JSONB,\n  'success',\n  NOW()\n)\nRETURNING invocation_id;",
         "options": {}
       },
       "id": "log-invocation",
       "name": "Log Invocation",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [880, 100],
+      "position": [1320, 100],
       "credentials": {
         "postgres": {
           "id": "aUYl5Qo5xhAItjGP",
@@ -78,13 +130,13 @@
     },
     {
       "parameters": {
-        "jsCode": "// Build success response\nconst policyData = $('Evaluate Policy Matrix').first().json;\nconst invocation = $('Log Invocation').first().json;\n\nreturn [{\n  json: {\n    data: policyData.policy_result,\n    correlation_id: policyData.correlation_id,\n    invocation_id: invocation.invocation_id,\n    meta: {\n      request_id: policyData.request_id,\n      execution_ms: Date.now() - policyData._startTime,\n      gaap_layer: 'L2',\n      camdl_anchored: false\n    }\n  }\n}];"
+        "jsCode": "// Build success response\nconst policyData = $('Merge Policy Result').first().json;\nconst invocation = $('Log Invocation').first().json;\n\nreturn [{\n  json: {\n    data: policyData.policy_result,\n    correlation_id: policyData.correlation_id,\n    invocation_id: invocation.invocation_id,\n    meta: {\n      request_id: policyData.request_id,\n      execution_ms: Date.now() - policyData._startTime,\n      gaap_layer: 'L2',\n      camdl_anchored: false,\n      aws_endpoint: policyData._aws_endpoint || false,\n      fallback_used: policyData._fallback || false\n    }\n  }\n}];"
       },
       "id": "build-response",
       "name": "Build Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1100, 100]
+      "position": [1540, 100]
     },
     {
       "parameters": {},
@@ -92,7 +144,7 @@
       "name": "Merge Responses",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
-      "position": [1320, 0]
+      "position": [1760, 0]
     }
   ],
   "connections": {
@@ -129,14 +181,54 @@
         ],
         [
           {
-            "node": "Evaluate Policy Matrix",
+            "node": "Call AWS CamDX Verify",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Evaluate Policy Matrix": {
+    "Call AWS CamDX Verify": {
+      "main": [
+        [
+          {
+            "node": "Map AWS Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluate Policy (Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map AWS Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Policy Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Policy (Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Merge Policy Result",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Policy Result": {
       "main": [
         [
           {
