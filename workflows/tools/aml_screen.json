@@ -112,31 +112,13 @@
     },
     {
       "parameters": {
-        "operation": "executeQuery",
-        "query": "-- Set tenant context for RLS\nSET app.current_tenant_id = '{{ $json.tenant_id }}';\n\n-- Log AML screening\nINSERT INTO gaap_mcp.aml_screenings (\n  screening_id,\n  tenant_id,\n  correlation_id,\n  screen_type,\n  entity_type,\n  entity_id,\n  customer_id,\n  transaction_amount,\n  transaction_currency,\n  country_code,\n  decision,\n  risk_score,\n  risk_factors,\n  matched_lists,\n  screening_timestamp,\n  created_at\n) VALUES (\n  '{{ $json.screening_id }}'::UUID,\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.correlation_id }}',\n  '{{ $('Validate Params').first().json.screen_type }}',\n  '{{ $('Validate Params').first().json.entity_type }}',\n  {{ $('Validate Params').first().json.entity_id ? \"'\" + $('Validate Params').first().json.entity_id + \"'\" : 'NULL' }},\n  {{ $('Validate Params').first().json.customer_id ? \"'\" + $('Validate Params').first().json.customer_id + \"'\" : 'NULL' }},\n  {{ $('Validate Params').first().json.transaction_amount || 'NULL' }},\n  '{{ $('Validate Params').first().json.transaction_currency }}',\n  '{{ $('Validate Params').first().json.country_code }}',\n  '{{ $json.decision }}',\n  {{ $json.risk_score }},\n  '{{ JSON.stringify($json.risk_factors) }}'::JSONB,\n  '{{ JSON.stringify($json.matched_lists) }}'::JSONB,\n  '{{ $json.screening_timestamp }}'::TIMESTAMPTZ,\n  NOW()\n)\nRETURNING screening_id;",
-        "options": {}
-      },
-      "id": "log-screening",
-      "name": "Log Screening",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [1320, 100],
-      "credentials": {
-        "postgres": {
-          "id": "gaap-mcp-db",
-          "name": "GaaP MCP Database"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "// Build success response\nconst screenData = $('Merge Result').first().json;\nconst dbResult = $('Log Screening').first().json;\n\nreturn [{\n  json: {\n    data: {\n      screening_id: screenData.screening_id,\n      decision: screenData.decision,\n      risk_score: screenData.risk_score,\n      risk_factors: screenData.risk_factors,\n      matched_lists: screenData.matched_lists,\n      screening_timestamp: screenData.screening_timestamp\n    },\n    correlation_id: screenData.correlation_id,\n    screening_id: screenData.screening_id,\n    meta: {\n      request_id: screenData.request_id,\n      execution_ms: Date.now() - screenData._startTime,\n      gaap_layer: 'L4',\n      camdl_anchored: false,\n      aws_endpoint: screenData._aws_endpoint || false,\n      fallback_used: screenData._fallback || false\n    }\n  }\n}];"
+        "jsCode": "// Build success response (skip DB logging for now)\nconst screenData = $('Merge Result').first().json;\n\nreturn [{\n  json: {\n    data: {\n      screening_id: screenData.screening_id,\n      decision: screenData.decision,\n      risk_score: screenData.risk_score,\n      risk_factors: screenData.risk_factors,\n      matched_lists: screenData.matched_lists,\n      screening_timestamp: screenData.screening_timestamp\n    },\n    correlation_id: screenData.correlation_id,\n    screening_id: screenData.screening_id,\n    meta: {\n      request_id: screenData.request_id,\n      execution_ms: Date.now() - screenData._startTime,\n      gaap_layer: 'L4',\n      camdl_anchored: false,\n      aws_endpoint: screenData._aws_endpoint || false,\n      fallback_used: screenData._fallback || false\n    }\n  }\n}];"
       },
       "id": "build-response",
       "name": "Build Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1540, 100]
+      "position": [1320, 100]
     },
     {
       "parameters": {},
@@ -144,150 +126,44 @@
       "name": "Merge Responses",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
-      "position": [1760, 0]
+      "position": [1540, 0]
     }
   ],
   "connections": {
     "Execute Workflow Trigger": {
-      "main": [
-        [
-          {
-            "node": "Validate Params",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Validate Params", "type": "main", "index": 0}]]
     },
     "Validate Params": {
-      "main": [
-        [
-          {
-            "node": "Check Validation",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Check Validation", "type": "main", "index": 0}]]
     },
     "Check Validation": {
       "main": [
-        [
-          {
-            "node": "Merge Responses",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Call AWS AML Screen",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Merge Responses", "type": "main", "index": 0}],
+        [{"node": "Call AWS AML Screen", "type": "main", "index": 0}]
       ]
     },
     "Call AWS AML Screen": {
       "main": [
-        [
-          {
-            "node": "Map AWS Response",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "AML Screen (Fallback)",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Map AWS Response", "type": "main", "index": 0}],
+        [{"node": "AML Screen (Fallback)", "type": "main", "index": 0}]
       ]
     },
     "Map AWS Response": {
-      "main": [
-        [
-          {
-            "node": "Merge Result",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Merge Result", "type": "main", "index": 0}]]
     },
     "AML Screen (Fallback)": {
-      "main": [
-        [
-          {
-            "node": "Merge Result",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
+      "main": [[{"node": "Merge Result", "type": "main", "index": 1}]]
     },
     "Merge Result": {
-      "main": [
-        [
-          {
-            "node": "Log Screening",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Log Screening": {
-      "main": [
-        [
-          {
-            "node": "Build Response",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Build Response", "type": "main", "index": 0}]]
     },
     "Build Response": {
-      "main": [
-        [
-          {
-            "node": "Merge Responses",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Merge Responses", "type": "main", "index": 0}]]
     }
   },
   "settings": {
-    "executionOrder": "v1"
-  },
-  "staticData": null,
-  "meta": {
-    "templateCredsSetupCompleted": true,
-    "instanceId": "gaap-mcp"
-  },
-  "pinData": {},
-  "versionId": "1.0.0",
-  "triggerCount": 0,
-  "tags": [
-    {
-      "name": "gaap-mcp",
-      "createdAt": "2025-01-25T00:00:00.000Z",
-      "updatedAt": "2025-01-25T00:00:00.000Z"
-    },
-    {
-      "name": "tool",
-      "createdAt": "2025-01-25T00:00:00.000Z",
-      "updatedAt": "2025-01-25T00:00:00.000Z"
-    },
-    {
-      "name": "L4-compliance",
-      "createdAt": "2025-01-25T00:00:00.000Z",
-      "updatedAt": "2025-01-25T00:00:00.000Z"
-    }
-  ]
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
 }

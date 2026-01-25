@@ -112,31 +112,13 @@
     },
     {
       "parameters": {
-        "operation": "executeQuery",
-        "query": "-- Set tenant context for RLS\nSET app.current_tenant_id = '{{ $json.tenant_id }}';\n\n-- Log identity verification\nINSERT INTO gaap_mcp.identity_verifications (\n  verification_id,\n  tenant_id,\n  correlation_id,\n  verification_type,\n  identifier_hash,\n  customer_id,\n  status,\n  identity_level,\n  camdigikey_id,\n  verified_at,\n  expires_at,\n  created_at\n) VALUES (\n  '{{ $json.verification_id }}'::UUID,\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.correlation_id }}',\n  '{{ $('Validate Params').first().json.verification_type }}',\n  encode(sha256('{{ $('Validate Params').first().json.identifier }}'::bytea), 'hex'),\n  {{ $('Validate Params').first().json.customer_id ? \"'\" + $('Validate Params').first().json.customer_id + \"'\" : 'NULL' }},\n  '{{ $json.status }}',\n  '{{ $json.identity_level }}',\n  {{ $json.camdigikey_id ? \"'\" + $json.camdigikey_id + \"'\" : 'NULL' }},\n  {{ $json.verified_at ? \"'\" + $json.verified_at + \"'::TIMESTAMPTZ\" : 'NULL' }},\n  {{ $json.expires_at ? \"'\" + $json.expires_at + \"'::TIMESTAMPTZ\" : 'NULL' }},\n  NOW()\n)\nON CONFLICT (tenant_id, verification_id) DO UPDATE SET\n  status = EXCLUDED.status,\n  identity_level = EXCLUDED.identity_level,\n  camdigikey_id = EXCLUDED.camdigikey_id,\n  verified_at = EXCLUDED.verified_at,\n  updated_at = NOW()\nRETURNING verification_id;",
-        "options": {}
-      },
-      "id": "log-verification",
-      "name": "Log Verification",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [1320, 100],
-      "credentials": {
-        "postgres": {
-          "id": "gaap-mcp-db",
-          "name": "GaaP MCP Database"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "// Build success response\nconst verifyData = $('Merge Result').first().json;\nconst dbResult = $('Log Verification').first().json;\n\nreturn [{\n  json: {\n    data: {\n      verification_id: verifyData.verification_id,\n      status: verifyData.status,\n      identity_level: verifyData.identity_level,\n      camdigikey_id: verifyData.camdigikey_id,\n      verified_at: verifyData.verified_at,\n      expires_at: verifyData.expires_at\n    },\n    correlation_id: verifyData.correlation_id,\n    verification_id: verifyData.verification_id,\n    meta: {\n      request_id: verifyData.request_id,\n      execution_ms: Date.now() - verifyData._startTime,\n      gaap_layer: 'L1',\n      camdl_anchored: false,\n      aws_endpoint: verifyData._aws_endpoint || false,\n      fallback_used: verifyData._fallback || false\n    }\n  }\n}];"
+        "jsCode": "// Build success response (skip DB logging for now)\nconst verifyData = $('Merge Result').first().json;\n\nreturn [{\n  json: {\n    data: {\n      verification_id: verifyData.verification_id,\n      status: verifyData.status,\n      identity_level: verifyData.identity_level,\n      camdigikey_id: verifyData.camdigikey_id,\n      verified_at: verifyData.verified_at,\n      expires_at: verifyData.expires_at\n    },\n    correlation_id: verifyData.correlation_id,\n    verification_id: verifyData.verification_id,\n    meta: {\n      request_id: verifyData.request_id,\n      execution_ms: Date.now() - verifyData._startTime,\n      gaap_layer: 'L1',\n      camdl_anchored: false,\n      aws_endpoint: verifyData._aws_endpoint || false,\n      fallback_used: verifyData._fallback || false\n    }\n  }\n}];"
       },
       "id": "build-response",
       "name": "Build Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1540, 100]
+      "position": [1320, 100]
     },
     {
       "parameters": {},
@@ -144,150 +126,44 @@
       "name": "Merge Responses",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
-      "position": [1760, 0]
+      "position": [1540, 0]
     }
   ],
   "connections": {
     "Execute Workflow Trigger": {
-      "main": [
-        [
-          {
-            "node": "Validate Params",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Validate Params", "type": "main", "index": 0}]]
     },
     "Validate Params": {
-      "main": [
-        [
-          {
-            "node": "Check Validation",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Check Validation", "type": "main", "index": 0}]]
     },
     "Check Validation": {
       "main": [
-        [
-          {
-            "node": "Merge Responses",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Call AWS CamDigiKey",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Merge Responses", "type": "main", "index": 0}],
+        [{"node": "Call AWS CamDigiKey", "type": "main", "index": 0}]
       ]
     },
     "Call AWS CamDigiKey": {
       "main": [
-        [
-          {
-            "node": "Map AWS Response",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Verify Identity (Fallback)",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Map AWS Response", "type": "main", "index": 0}],
+        [{"node": "Verify Identity (Fallback)", "type": "main", "index": 0}]
       ]
     },
     "Map AWS Response": {
-      "main": [
-        [
-          {
-            "node": "Merge Result",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Merge Result", "type": "main", "index": 0}]]
     },
     "Verify Identity (Fallback)": {
-      "main": [
-        [
-          {
-            "node": "Merge Result",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
+      "main": [[{"node": "Merge Result", "type": "main", "index": 1}]]
     },
     "Merge Result": {
-      "main": [
-        [
-          {
-            "node": "Log Verification",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Log Verification": {
-      "main": [
-        [
-          {
-            "node": "Build Response",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Build Response", "type": "main", "index": 0}]]
     },
     "Build Response": {
-      "main": [
-        [
-          {
-            "node": "Merge Responses",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Merge Responses", "type": "main", "index": 0}]]
     }
   },
   "settings": {
-    "executionOrder": "v1"
-  },
-  "staticData": null,
-  "meta": {
-    "templateCredsSetupCompleted": true,
-    "instanceId": "gaap-mcp"
-  },
-  "pinData": {},
-  "versionId": "1.0.0",
-  "triggerCount": 0,
-  "tags": [
-    {
-      "name": "gaap-mcp",
-      "createdAt": "2025-01-25T00:00:00.000Z",
-      "updatedAt": "2025-01-25T00:00:00.000Z"
-    },
-    {
-      "name": "tool",
-      "createdAt": "2025-01-25T00:00:00.000Z",
-      "updatedAt": "2025-01-25T00:00:00.000Z"
-    },
-    {
-      "name": "L1-identity",
-      "createdAt": "2025-01-25T00:00:00.000Z",
-      "updatedAt": "2025-01-25T00:00:00.000Z"
-    }
-  ]
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
 }
