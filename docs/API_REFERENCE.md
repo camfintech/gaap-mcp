@@ -8,10 +8,10 @@ The GaaP MCP provides standardized access to Cambodia's digital infrastructure l
 
 | Layer | Services | Tools |
 |-------|----------|-------|
-| **L1** | Identity (CamDigiKey) | `gaap_identity_verify`, `gaap_identity_check_level`, `gaap_identity_generate_qr` |
+| **L1** | Identity (CamDigiKey) | `gaap_identity_verify` |
 | **L2** | Policy (CamDX) | `gaap_policy_evaluate`, `gaap_policy_publish_intent` |
-| **L3** | Payments (Bakong/KHQR) | `gaap_khqr_generate`, `gaap_khqr_verify_settlement`, `gaap_khqr_poll_status` |
-| **L4** | Compliance (CamDL) | `gaap_audit_log_event`, `gaap_audit_anchor_batch`, `gaap_audit_verify`, `gaap_audit_generate_proof` |
+| **L3** | Payments (Bakong/KHQR) | `gaap_khqr_generate`, `gaap_khqr_verify_settlement` |
+| **L4** | Compliance (CamDL/GaaS) | `gaap_audit_log_event`, `gaap_aml_screen` |
 
 ## Base URL
 
@@ -366,11 +366,164 @@ Evaluate CamDX policy for a transaction.
 
 ---
 
-### L1 Identity Tools (Coming Soon)
+### L1 Identity Tools
 
 #### `gaap_identity_verify`
 
-Initiate CamDigiKey verification flow.
+Verify identity via CamDigiKey or phone OTP. Returns verification status and identity assurance level.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `verification_type` | string | Yes | Type: `camdigikey_l1`, `camdigikey_l2`, `phone_otp`, or `document` |
+| `identifier` | string | Yes | Phone number (+855...), ID number, or CamDigiKey ID |
+| `verification_code` | string | No | OTP code (required for `phone_otp` type) |
+| `customer_id` | string | No | Internal customer ID for linking |
+| `metadata` | object | No | Additional context |
+
+**Example Request:**
+
+```json
+{
+  "tool": "gaap_identity_verify",
+  "tenant_context": {
+    "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
+    "correlation_id": "CRR-2026-identity-001"
+  },
+  "params": {
+    "verification_type": "camdigikey_l2",
+    "identifier": "+855123456789",
+    "customer_id": "CUST-001"
+  }
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "success": true,
+  "result": {
+    "data": {
+      "verification_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      "status": "verified",
+      "identity_level": "high_assurance",
+      "camdigikey_id": "CDK-1706000000-abc123",
+      "verified_at": "2026-01-25T10:30:00Z",
+      "expires_at": "2026-01-26T10:30:00Z"
+    },
+    "correlation_id": "CRR-2026-identity-001",
+    "verification_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+  },
+  "meta": {
+    "request_id": "REQ-2026-001",
+    "execution_ms": 245,
+    "gaap_layer": "L1",
+    "camdl_anchored": false,
+    "aws_endpoint": true,
+    "fallback_used": false
+  }
+}
+```
+
+**Identity Levels:**
+
+| Level | Description | Verification Type |
+|-------|-------------|-------------------|
+| `anonymous` | No verification | None |
+| `basic` | Phone verified | `phone_otp` |
+| `verified` | CamDigiKey L1 | `camdigikey_l1` |
+| `high_assurance` | CamDigiKey L2 + biometric | `camdigikey_l2` |
+
+---
+
+### L4 Compliance Tools (Additional)
+
+#### `gaap_aml_screen`
+
+Perform AML/CFT screening via GaaS. Checks transactions, customers, PEP lists, and sanctions. Returns risk decision with score and factors.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `screen_type` | string | Yes | Type: `transaction`, `customer`, `pep`, or `sanctions` |
+| `customer_name` | string | No | Customer name for PEP/sanctions check |
+| `customer_id` | string | No | Internal customer ID |
+| `transaction_amount` | number | No | Amount for risk assessment |
+| `transaction_currency` | string | No | Currency code (default: `USD`) |
+| `country_code` | string | No | ISO 3166-1 alpha-2 code (default: `KH`) |
+| `entity_type` | string | No | `individual` or `business` (default: `individual`) |
+| `entity_id` | string | No | Order ID or entity being screened |
+
+**Example Request:**
+
+```json
+{
+  "tool": "gaap_aml_screen",
+  "tenant_context": {
+    "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
+    "correlation_id": "CRR-2026-aml-001"
+  },
+  "params": {
+    "screen_type": "transaction",
+    "transaction_amount": 500,
+    "transaction_currency": "USD",
+    "country_code": "KH",
+    "entity_type": "individual",
+    "entity_id": "ORD-2026-001"
+  }
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "success": true,
+  "result": {
+    "data": {
+      "screening_id": "a1b2c3d4-5678-90ab-cdef-123456789abc",
+      "decision": "ALLOW",
+      "risk_score": 15,
+      "risk_factors": ["MODERATE_TRANSACTION_VALUE"],
+      "matched_lists": [],
+      "screening_timestamp": "2026-01-25T10:35:00Z"
+    },
+    "correlation_id": "CRR-2026-aml-001",
+    "screening_id": "a1b2c3d4-5678-90ab-cdef-123456789abc"
+  },
+  "meta": {
+    "request_id": "REQ-2026-002",
+    "execution_ms": 189,
+    "gaap_layer": "L4",
+    "camdl_anchored": false,
+    "aws_endpoint": true,
+    "fallback_used": false
+  }
+}
+```
+
+**Decisions:**
+
+| Decision | Risk Score | Action |
+|----------|------------|--------|
+| `ALLOW` | 0-39 | Transaction may proceed |
+| `REVIEW` | 40-69 | Manual review required |
+| `BLOCK` | 70-100 | Transaction blocked |
+
+**Risk Factors:**
+
+| Factor | Score Impact | Trigger |
+|--------|--------------|---------|
+| `HIGH_VALUE_TRANSACTION` | +40 | Amount > $10,000 |
+| `ELEVATED_TRANSACTION_VALUE` | +20 | Amount > $5,000 |
+| `MODERATE_TRANSACTION_VALUE` | +10 | Amount > $1,000 |
+| `HIGH_RISK_JURISDICTION` | +50 | Country in IR, KP, SY, CU |
+| `MEDIUM_RISK_JURISDICTION` | +25 | Country in MM, VE, ZW |
+| `BUSINESS_ENTITY` | +10 | Entity type is business |
+| `WATCHLIST_CHECK_PERFORMED` | +5 | PEP/sanctions check run |
 
 ---
 
@@ -422,6 +575,19 @@ Initiate CamDigiKey verification flow.
 | `L4_CAMDL_ANCHOR_FAILED` | Blockchain anchor failed | Yes |
 | `L4_AUDIT_HASH_COLLISION` | Hash collision | No |
 | `L4_AUDIT_MISSING_PARAMS` | Missing required params | No |
+| `L4_AML_MISSING_PARAMS` | Missing required AML params | No |
+| `L4_AML_INVALID_TYPE` | Invalid screen_type | No |
+| `L4_AML_BLOCKED` | Transaction blocked by AML screening | No |
+
+### L1 Identity Errors (Updated)
+
+| Code | Description | Recoverable |
+|------|-------------|-------------|
+| `L1_CAMDIGIKEY_UNAVAILABLE` | Service unavailable | Yes |
+| `L1_IDENTITY_LEVEL_INSUFFICIENT` | KYC level too low | No |
+| `L1_VERIFICATION_EXPIRED` | Verification expired | Yes |
+| `L1_IDENTITY_MISSING_PARAMS` | Missing required params | No |
+| `L1_IDENTITY_INVALID_TYPE` | Invalid verification_type | No |
 
 ---
 
@@ -567,6 +733,20 @@ const result = await client.auditLogEvent(
 
 ## Changelog
 
+### v1.2.0 (2026-01-25)
+- **AWS Mock DPI Endpoint Integration**
+  - All tools now call AWS mock DPI endpoints with automatic fallback
+  - Base URL: `lg99tn8y8g.execute-api.ap-southeast-1.amazonaws.com`
+- **`gaap_identity_verify` tool implemented**
+  - CamDigiKey L1/L2 verification via AWS `/v1/camdigikey/verify`
+  - Phone OTP verification
+  - Returns identity level and verification status
+- **`gaap_aml_screen` tool implemented**
+  - AML/CFT screening via AWS `/aml/screen`
+  - Transaction, customer, PEP, and sanctions screening
+  - Returns decision (ALLOW/REVIEW/BLOCK) with risk score
+- MCP server updated to 7 tools
+
 ### v1.1.0 (2025-01-13)
 - **`gaap_audit_log_event` batch mode support**
   - Added `batch_mode`, `batch_id`, `event_count`, `events[]` parameters
@@ -588,4 +768,5 @@ const result = await client.auditLogEvent(
 - CamDL anchoring (stub)
 
 ### Planned
-- L1 Identity tools (`gaap_identity_*`)
+- `gaap_audit_anchor_batch` - Batch merkle anchoring
+- `gaap_audit_generate_proof` - Generate compliance evidence package

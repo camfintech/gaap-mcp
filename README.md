@@ -36,13 +36,19 @@ The GaaP MCP extracts Cambodia's national digital infrastructure orchestration i
 
 ## Available Tools
 
-| Tool | GaaP Layer | Purpose |
-|------|------------|---------|
-| `gaap_audit_log_event` | L4 | Log compliance event with CamDL anchoring |
-| `gaap_khqr_generate` | L3 | Generate KHQR via Bakong (planned) |
-| `gaap_khqr_verify_settlement` | L3 | Verify payment status (planned) |
-| `gaap_policy_evaluate` | L2 | CamDX policy decision (planned) |
-| `gaap_identity_verify` | L1 | CamDigiKey verification (planned) |
+| Tool | GaaP Layer | Purpose | Status |
+|------|------------|---------|--------|
+| `gaap_audit_log_event` | L4 | Log compliance event with CamDL anchoring | ✅ AWS DPI |
+| `gaap_aml_screen` | L4 | AML/CFT screening (transaction, PEP, sanctions) | ✅ AWS DPI |
+| `gaap_khqr_generate` | L3 | Generate KHQR via Bakong | ✅ AWS DPI |
+| `gaap_khqr_verify_settlement` | L3 | Verify payment status | ✅ Implemented |
+| `gaap_policy_evaluate` | L2 | CamDX policy decision | ✅ Implemented |
+| `gaap_policy_publish_intent` | L2 | Publish payment intent to CamDX X-Road | ✅ Implemented |
+| `gaap_identity_verify` | L1 | CamDigiKey verification | ✅ AWS DPI |
+
+### AWS Mock DPI Endpoints
+
+Tools with "AWS DPI" status call mock endpoints at `lg99tn8y8g.execute-api.ap-southeast-1.amazonaws.com` with automatic fallback to local logic on HTTP errors.
 
 ## Quick Start
 
@@ -121,21 +127,30 @@ const signature = crypto.createHmac('sha256', webhookSecret).update(canonical).d
 
 ```
 gaap-mcp/
+├── mcp-server/                        # Claude Desktop MCP server
+│   ├── src/
+│   │   ├── index.ts                   # MCP server (7 tools)
+│   │   ├── auth.ts                    # HMAC signature
+│   │   └── client.ts                  # HTTP client
+│   └── package.json
 ├── workflows/
 │   ├── _router/
 │   │   └── gaap_tool_gateway.json     # Main gateway (auth, dispatch)
 │   ├── internal/
 │   │   └── credential_resolver.json   # Secure credential resolution
-│   ├── shared/
-│   │   ├── auth_verify.json           # HMAC verification helper
-│   │   ├── envelope_builders.json     # Request/response envelopes
-│   │   └── error_mapper.json          # Error code mapping
 │   └── tools/
-│       └── audit_log_event.json       # L4 compliance tool
+│       ├── audit_log_event.json       # L4 compliance (AWS DPI)
+│       ├── aml_screen.json            # L4 AML/CFT (AWS DPI)
+│       ├── identity_verify.json       # L1 CamDigiKey (AWS DPI)
+│       ├── khqr_generate.json         # L3 Bakong (AWS DPI)
+│       ├── khqr_verify_settlement.json
+│       ├── policy_evaluate.json
+│       └── policy_publish_intent.json
 ├── database/
 │   └── gaap_mcp_schema.sql            # Multi-tenant schema
 ├── docs/
-│   └── API_REFERENCE.md               # Full API documentation
+│   ├── API_REFERENCE.md               # Full API documentation
+│   └── GAAP_MCP_ARCHITECTURE.md       # Architecture plan
 └── README.md
 ```
 
