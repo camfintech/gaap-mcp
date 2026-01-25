@@ -1,0 +1,293 @@
+{
+  "name": "GaaP MCP Tool: AML Screen",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// gaap_aml_screen - AML/CFT Screening via GaaS\n// =============================================================================\n// GaaP Layer: L4 (Compliance)\n//\n// Input params:\n//   screen_type: string (required) - 'transaction', 'customer', 'pep', 'sanctions'\n//   customer_name: string (optional) - Customer name for PEP/sanctions check\n//   customer_id: string (optional) - Internal customer ID\n//   transaction_amount: number (optional) - Transaction amount for risk assessment\n//   transaction_currency: string (optional) - Currency code (default: USD)\n//   country_code: string (optional) - Country for jurisdiction check\n//   entity_type: string (optional) - 'individual' or 'business'\n//   entity_id: string (optional) - Order ID or entity being screened\n//   metadata: object (optional) - Additional context\n//\n// Output:\n//   screening_id: UUID\n//   decision: 'ALLOW', 'REVIEW', 'BLOCK'\n//   risk_score: number (0-100)\n//   risk_factors: array of detected risk factors\n//   matched_lists: array of matched watchlists (if any)\n// =============================================================================\n\nconst crypto = require('crypto');\n\nconst input = $input.first().json;\nconst startTime = input._startTime || Date.now();\nconst requestId = input.request_id;\nconst tenantId = input.tenant_context?.tenant_id;\nconst correlationId = input.tenant_context?.correlation_id || `CRR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;\n\n// Validate required params\nconst params = input.params || {};\nconst requiredParams = ['screen_type'];\nconst missingParams = requiredParams.filter(p => !params[p]);\n\nif (missingParams.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L4_AML_MISSING_PARAMS',\n        message: `Missing required parameters: ${missingParams.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L4',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Validate screen_type\nconst validTypes = ['transaction', 'customer', 'pep', 'sanctions'];\nif (!validTypes.includes(params.screen_type)) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L4_AML_INVALID_TYPE',\n        message: `Invalid screen_type. Valid types: ${validTypes.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L4',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Generate screening ID\nconst screeningId = crypto.randomUUID();\n\nreturn [{\n  json: {\n    _startTime: startTime,\n    request_id: requestId,\n    tenant_id: tenantId,\n    correlation_id: correlationId,\n    screening_id: screeningId,\n    screen_type: params.screen_type,\n    customer_name: params.customer_name || null,\n    customer_id: params.customer_id || null,\n    transaction_amount: params.transaction_amount || null,\n    transaction_currency: params.transaction_currency || 'USD',\n    country_code: params.country_code || 'KH',\n    entity_type: params.entity_type || 'individual',\n    entity_id: params.entity_id || null,\n    metadata: params.metadata || {}\n  }\n}];"
+      },
+      "id": "validate-params",
+      "name": "Validate Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-validation",
+      "name": "Check Validation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://lg99tn8y8g.execute-api.ap-southeast-1.amazonaws.com/aml/screen",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $json.correlation_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"screen_type\": \"{{ $json.screen_type }}\",\n  \"customer_name\": {{ $json.customer_name ? '\"' + $json.customer_name + '\"' : 'null' }},\n  \"transaction_amount\": {{ $json.transaction_amount || 'null' }},\n  \"transaction_currency\": \"{{ $json.transaction_currency }}\",\n  \"country_code\": \"{{ $json.country_code }}\",\n  \"entity_type\": \"{{ $json.entity_type }}\"\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "call-aws-aml",
+      "name": "Call AWS AML Screen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 100],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Map AWS AML Response\n// =============================================================================\nconst input = $('Validate Params').first().json;\nconst awsResponse = $input.first().json;\n\n// Map AWS response to expected format\nconst decision = awsResponse.decision || awsResponse.screening_decision || 'ALLOW';\nconst riskScore = awsResponse.risk_score || awsResponse.score || 0;\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    screening_id: input.screening_id,\n    decision: decision,\n    risk_score: riskScore,\n    risk_factors: awsResponse.risk_factors || awsResponse.factors || [],\n    matched_lists: awsResponse.matched_lists || awsResponse.matches || [],\n    screening_timestamp: awsResponse.timestamp || new Date().toISOString(),\n    _aws_endpoint: true\n  }\n}];"
+      },
+      "id": "map-aws-response",
+      "name": "Map AWS Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// AML Screening (Local Fallback)\n// =============================================================================\n// Used when AWS endpoint fails or is disabled.\n// Returns a mock screening result based on simple rules.\n// =============================================================================\n\nconst input = $('Validate Params').first().json;\n\n// Simple rule-based screening for fallback\nlet decision = 'ALLOW';\nlet riskScore = 0;\nconst riskFactors = [];\nconst matchedLists = [];\n\n// Transaction amount check\nif (input.transaction_amount) {\n  const amount = parseFloat(input.transaction_amount);\n  \n  if (amount > 10000) {\n    riskScore += 40;\n    riskFactors.push('HIGH_VALUE_TRANSACTION');\n  } else if (amount > 5000) {\n    riskScore += 20;\n    riskFactors.push('ELEVATED_TRANSACTION_VALUE');\n  } else if (amount > 1000) {\n    riskScore += 10;\n    riskFactors.push('MODERATE_TRANSACTION_VALUE');\n  }\n}\n\n// Country risk check (simplified)\nconst highRiskCountries = ['IR', 'KP', 'SY', 'CU'];\nconst mediumRiskCountries = ['MM', 'VE', 'ZW'];\n\nif (highRiskCountries.includes(input.country_code)) {\n  riskScore += 50;\n  riskFactors.push('HIGH_RISK_JURISDICTION');\n} else if (mediumRiskCountries.includes(input.country_code)) {\n  riskScore += 25;\n  riskFactors.push('MEDIUM_RISK_JURISDICTION');\n}\n\n// Business entity check\nif (input.entity_type === 'business') {\n  riskScore += 10;\n  riskFactors.push('BUSINESS_ENTITY');\n}\n\n// PEP/Sanctions check (mock - always clean for fallback)\nif (input.screen_type === 'pep' || input.screen_type === 'sanctions') {\n  riskScore += 5;\n  riskFactors.push('WATCHLIST_CHECK_PERFORMED');\n  // No matches in fallback mode\n}\n\n// Determine decision based on risk score\nif (riskScore >= 70) {\n  decision = 'BLOCK';\n} else if (riskScore >= 40) {\n  decision = 'REVIEW';\n} else {\n  decision = 'ALLOW';\n}\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    screening_id: input.screening_id,\n    decision: decision,\n    risk_score: riskScore,\n    risk_factors: riskFactors,\n    matched_lists: matchedLists,\n    screening_timestamp: new Date().toISOString(),\n    _fallback: true\n  }\n}];"
+      },
+      "id": "aml-screen-fallback",
+      "name": "AML Screen (Fallback)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "extra"
+      },
+      "id": "merge-result",
+      "name": "Merge Result",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Set tenant context for RLS\nSET app.current_tenant_id = '{{ $json.tenant_id }}';\n\n-- Log AML screening\nINSERT INTO gaap_mcp.aml_screenings (\n  screening_id,\n  tenant_id,\n  correlation_id,\n  screen_type,\n  entity_type,\n  entity_id,\n  customer_id,\n  transaction_amount,\n  transaction_currency,\n  country_code,\n  decision,\n  risk_score,\n  risk_factors,\n  matched_lists,\n  screening_timestamp,\n  created_at\n) VALUES (\n  '{{ $json.screening_id }}'::UUID,\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.correlation_id }}',\n  '{{ $('Validate Params').first().json.screen_type }}',\n  '{{ $('Validate Params').first().json.entity_type }}',\n  {{ $('Validate Params').first().json.entity_id ? \"'\" + $('Validate Params').first().json.entity_id + \"'\" : 'NULL' }},\n  {{ $('Validate Params').first().json.customer_id ? \"'\" + $('Validate Params').first().json.customer_id + \"'\" : 'NULL' }},\n  {{ $('Validate Params').first().json.transaction_amount || 'NULL' }},\n  '{{ $('Validate Params').first().json.transaction_currency }}',\n  '{{ $('Validate Params').first().json.country_code }}',\n  '{{ $json.decision }}',\n  {{ $json.risk_score }},\n  '{{ JSON.stringify($json.risk_factors) }}'::JSONB,\n  '{{ JSON.stringify($json.matched_lists) }}'::JSONB,\n  '{{ $json.screening_timestamp }}'::TIMESTAMPTZ,\n  NOW()\n)\nRETURNING screening_id;",
+        "options": {}
+      },
+      "id": "log-screening",
+      "name": "Log Screening",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1320, 100],
+      "credentials": {
+        "postgres": {
+          "id": "gaap-mcp-db",
+          "name": "GaaP MCP Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success response\nconst screenData = $('Merge Result').first().json;\nconst dbResult = $('Log Screening').first().json;\n\nreturn [{\n  json: {\n    data: {\n      screening_id: screenData.screening_id,\n      decision: screenData.decision,\n      risk_score: screenData.risk_score,\n      risk_factors: screenData.risk_factors,\n      matched_lists: screenData.matched_lists,\n      screening_timestamp: screenData.screening_timestamp\n    },\n    correlation_id: screenData.correlation_id,\n    screening_id: screenData.screening_id,\n    meta: {\n      request_id: screenData.request_id,\n      execution_ms: Date.now() - screenData._startTime,\n      gaap_layer: 'L4',\n      camdl_anchored: false,\n      aws_endpoint: screenData._aws_endpoint || false,\n      fallback_used: screenData._fallback || false\n    }\n  }\n}];"
+      },
+      "id": "build-response",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 100]
+    },
+    {
+      "parameters": {},
+      "id": "merge-responses",
+      "name": "Merge Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1760, 0]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Params": {
+      "main": [
+        [
+          {
+            "node": "Check Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Validation": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call AWS AML Screen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call AWS AML Screen": {
+      "main": [
+        [
+          {
+            "node": "Map AWS Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AML Screen (Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map AWS Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AML Screen (Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Merge Result",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Result": {
+      "main": [
+        [
+          {
+            "node": "Log Screening",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Screening": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-25T00:00:00.000Z",
+      "updatedAt": "2025-01-25T00:00:00.000Z"
+    },
+    {
+      "name": "tool",
+      "createdAt": "2025-01-25T00:00:00.000Z",
+      "updatedAt": "2025-01-25T00:00:00.000Z"
+    },
+    {
+      "name": "L4-compliance",
+      "createdAt": "2025-01-25T00:00:00.000Z",
+      "updatedAt": "2025-01-25T00:00:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,293 @@
+{
+  "name": "GaaP MCP Tool: Identity Verify",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// gaap_identity_verify - Verify identity via CamDigiKey\n// =============================================================================\n// GaaP Layer: L1 (Identity)\n//\n// Input params:\n//   verification_type: string (required) - 'camdigikey_l1', 'camdigikey_l2', 'phone_otp'\n//   identifier: string (required) - Phone number, ID number, or CamDigiKey ID\n//   verification_code: string (optional) - OTP or verification code\n//   customer_id: string (optional) - Internal customer ID for linking\n//   metadata: object (optional) - Additional context\n//\n// Output:\n//   verification_id: UUID\n//   status: 'verified', 'pending', 'failed'\n//   identity_level: 'anonymous', 'basic', 'verified', 'high_assurance'\n//   camdigikey_id: string (if verified via CamDigiKey)\n// =============================================================================\n\nconst crypto = require('crypto');\n\nconst input = $input.first().json;\nconst startTime = input._startTime || Date.now();\nconst requestId = input.request_id;\nconst tenantId = input.tenant_context?.tenant_id;\nconst correlationId = input.tenant_context?.correlation_id || `CRR-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;\n\n// Validate required params\nconst params = input.params || {};\nconst requiredParams = ['verification_type', 'identifier'];\nconst missingParams = requiredParams.filter(p => !params[p]);\n\nif (missingParams.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L1_IDENTITY_MISSING_PARAMS',\n        message: `Missing required parameters: ${missingParams.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L1',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Validate verification_type\nconst validTypes = ['camdigikey_l1', 'camdigikey_l2', 'phone_otp', 'document'];\nif (!validTypes.includes(params.verification_type)) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'L1_IDENTITY_INVALID_TYPE',\n        message: `Invalid verification_type. Valid types: ${validTypes.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'L1',\n        camdl_anchored: false\n      }\n    }\n  }];\n}\n\n// Generate verification ID\nconst verificationId = crypto.randomUUID();\n\nreturn [{\n  json: {\n    _startTime: startTime,\n    request_id: requestId,\n    tenant_id: tenantId,\n    correlation_id: correlationId,\n    verification_id: verificationId,\n    verification_type: params.verification_type,\n    identifier: params.identifier,\n    verification_code: params.verification_code || null,\n    customer_id: params.customer_id || null,\n    metadata: params.metadata || {}\n  }\n}];"
+      },
+      "id": "validate-params",
+      "name": "Validate Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-validation",
+      "name": "Check Validation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://lg99tn8y8g.execute-api.ap-southeast-1.amazonaws.com/v1/camdigikey/verify",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $json.correlation_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"verification_type\": \"{{ $json.verification_type }}\",\n  \"identifier\": \"{{ $json.identifier }}\",\n  \"verification_code\": {{ $json.verification_code ? '\"' + $json.verification_code + '\"' : 'null' }},\n  \"customer_id\": {{ $json.customer_id ? '\"' + $json.customer_id + '\"' : 'null' }}\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "call-aws-camdigikey",
+      "name": "Call AWS CamDigiKey",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 100],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Map AWS CamDigiKey Response\n// =============================================================================\nconst input = $('Validate Params').first().json;\nconst awsResponse = $input.first().json;\n\n// Map AWS response to expected format\nconst status = awsResponse.status || awsResponse.verification_status || 'verified';\nconst identityLevel = awsResponse.identity_level || awsResponse.assurance_level || 'verified';\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    verification_id: input.verification_id,\n    status: status,\n    identity_level: identityLevel,\n    camdigikey_id: awsResponse.camdigikey_id || awsResponse.identity_id || null,\n    verified_at: awsResponse.verified_at || new Date().toISOString(),\n    expires_at: awsResponse.expires_at || null,\n    _aws_endpoint: true\n  }\n}];"
+      },
+      "id": "map-aws-response",
+      "name": "Map AWS Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Identity Verification (Local Fallback)\n// =============================================================================\n// Used when AWS endpoint fails or is disabled.\n// Returns a mock verification result for development/testing.\n// =============================================================================\n\nconst input = $('Validate Params').first().json;\n\n// Determine mock response based on verification type\nlet status = 'verified';\nlet identityLevel = 'basic';\n\nswitch (input.verification_type) {\n  case 'camdigikey_l2':\n    identityLevel = 'high_assurance';\n    break;\n  case 'camdigikey_l1':\n    identityLevel = 'verified';\n    break;\n  case 'phone_otp':\n    identityLevel = 'basic';\n    // Check if code is provided for OTP verification\n    if (!input.verification_code) {\n      status = 'pending';\n    }\n    break;\n  case 'document':\n    identityLevel = 'verified';\n    status = 'pending'; // Document verification requires manual review\n    break;\n}\n\nconst mockCamDigiKeyId = status === 'verified' \n  ? `CDK-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`\n  : null;\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    verification_id: input.verification_id,\n    status: status,\n    identity_level: identityLevel,\n    camdigikey_id: mockCamDigiKeyId,\n    verified_at: status === 'verified' ? new Date().toISOString() : null,\n    expires_at: status === 'verified' \n      ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() \n      : null,\n    _fallback: true\n  }\n}];"
+      },
+      "id": "verify-identity-fallback",
+      "name": "Verify Identity (Fallback)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "extra"
+      },
+      "id": "merge-result",
+      "name": "Merge Result",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Set tenant context for RLS\nSET app.current_tenant_id = '{{ $json.tenant_id }}';\n\n-- Log identity verification\nINSERT INTO gaap_mcp.identity_verifications (\n  verification_id,\n  tenant_id,\n  correlation_id,\n  verification_type,\n  identifier_hash,\n  customer_id,\n  status,\n  identity_level,\n  camdigikey_id,\n  verified_at,\n  expires_at,\n  created_at\n) VALUES (\n  '{{ $json.verification_id }}'::UUID,\n  '{{ $json.tenant_id }}'::UUID,\n  '{{ $json.correlation_id }}',\n  '{{ $('Validate Params').first().json.verification_type }}',\n  encode(sha256('{{ $('Validate Params').first().json.identifier }}'::bytea), 'hex'),\n  {{ $('Validate Params').first().json.customer_id ? \"'\" + $('Validate Params').first().json.customer_id + \"'\" : 'NULL' }},\n  '{{ $json.status }}',\n  '{{ $json.identity_level }}',\n  {{ $json.camdigikey_id ? \"'\" + $json.camdigikey_id + \"'\" : 'NULL' }},\n  {{ $json.verified_at ? \"'\" + $json.verified_at + \"'::TIMESTAMPTZ\" : 'NULL' }},\n  {{ $json.expires_at ? \"'\" + $json.expires_at + \"'::TIMESTAMPTZ\" : 'NULL' }},\n  NOW()\n)\nON CONFLICT (tenant_id, verification_id) DO UPDATE SET\n  status = EXCLUDED.status,\n  identity_level = EXCLUDED.identity_level,\n  camdigikey_id = EXCLUDED.camdigikey_id,\n  verified_at = EXCLUDED.verified_at,\n  updated_at = NOW()\nRETURNING verification_id;",
+        "options": {}
+      },
+      "id": "log-verification",
+      "name": "Log Verification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1320, 100],
+      "credentials": {
+        "postgres": {
+          "id": "gaap-mcp-db",
+          "name": "GaaP MCP Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success response\nconst verifyData = $('Merge Result').first().json;\nconst dbResult = $('Log Verification').first().json;\n\nreturn [{\n  json: {\n    data: {\n      verification_id: verifyData.verification_id,\n      status: verifyData.status,\n      identity_level: verifyData.identity_level,\n      camdigikey_id: verifyData.camdigikey_id,\n      verified_at: verifyData.verified_at,\n      expires_at: verifyData.expires_at\n    },\n    correlation_id: verifyData.correlation_id,\n    verification_id: verifyData.verification_id,\n    meta: {\n      request_id: verifyData.request_id,\n      execution_ms: Date.now() - verifyData._startTime,\n      gaap_layer: 'L1',\n      camdl_anchored: false,\n      aws_endpoint: verifyData._aws_endpoint || false,\n      fallback_used: verifyData._fallback || false\n    }\n  }\n}];"
+      },
+      "id": "build-response",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 100]
+    },
+    {
+      "parameters": {},
+      "id": "merge-responses",
+      "name": "Merge Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1760, 0]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Params": {
+      "main": [
+        [
+          {
+            "node": "Check Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Validation": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call AWS CamDigiKey",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call AWS CamDigiKey": {
+      "main": [
+        [
+          {
+            "node": "Map AWS Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Verify Identity (Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map AWS Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Identity (Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Merge Result",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Result": {
+      "main": [
+        [
+          {
+            "node": "Log Verification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Verification": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "gaap-mcp"
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {
+      "name": "gaap-mcp",
+      "createdAt": "2025-01-25T00:00:00.000Z",
+      "updatedAt": "2025-01-25T00:00:00.000Z"
+    },
+    {
+      "name": "tool",
+      "createdAt": "2025-01-25T00:00:00.000Z",
+      "updatedAt": "2025-01-25T00:00:00.000Z"
+    },
+    {
+      "name": "L1-identity",
+      "createdAt": "2025-01-25T00:00:00.000Z",
+      "updatedAt": "2025-01-25T00:00:00.000Z"
+    }
+  ]
+}

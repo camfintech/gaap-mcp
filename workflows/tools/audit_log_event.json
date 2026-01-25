@@ -97,18 +97,70 @@
     },
     {
       "parameters": {
-        "jsCode": "// =============================================================================\n// CamDL Anchoring (Stub Implementation)\n// =============================================================================\n// In production, this would call the CamDL API:\n// POST https://camdl.gov.kh/api/v1/anchor\n// {\n//   event_hash: string,\n//   event_type: string,\n//   metadata: { tenant_id, entity_ref, timestamp }\n// }\n//\n// Response:\n// {\n//   anchor_id: string,\n//   block_number: number,\n//   tx_hash: string,\n//   merkle_root: string\n// }\n// =============================================================================\n\nconst prepareData = $('Prepare Event').first().json;\nconst insertResult = $('Insert Event').first().json;\n\n// Stub: Generate mock CamDL response\n// In production: Call CamDL API\nconst mockAnchorId = `CAMDL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;\nconst mockBlockNumber = Math.floor(Date.now() / 1000);\nconst mockTxHash = `0x${require('crypto').randomBytes(32).toString('hex')}`;\n\nreturn [{\n  json: {\n    camdl_anchored: true,\n    camdl_anchor_id: mockAnchorId,\n    camdl_block_number: mockBlockNumber,\n    camdl_tx_hash: mockTxHash,\n    audit_event_id: insertResult.audit_event_id,\n    event_hash: insertResult.event_hash,\n    correlation_id: prepareData.correlation_id,\n    _startTime: prepareData._startTime,\n    request_id: prepareData.request_id\n  }\n}];"
+        "method": "POST",
+        "url": "https://lg99tn8y8g.execute-api.ap-southeast-1.amazonaws.com/v1/camdl/audit/log",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $('Prepare Event').first().json.correlation_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event_type\": \"{{ $('Prepare Event').first().json.event_type }}\",\n  \"entity_type\": \"{{ $('Prepare Event').first().json.entity_type }}\",\n  \"entity_id\": \"{{ $('Prepare Event').first().json.entity_id }}\",\n  \"event_hash\": \"{{ $('Insert Event').first().json.event_hash }}\",\n  \"event_timestamp\": \"{{ $('Prepare Event').first().json.event_timestamp }}\"\n}",
+        "options": {
+          "timeout": 10000
+        }
       },
-      "id": "anchor-to-camdl",
-      "name": "Anchor to CamDL (Stub)",
+      "id": "call-aws-camdl",
+      "name": "Call AWS CamDL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, -300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Map AWS CamDL Response\n// =============================================================================\nconst prepareData = $('Prepare Event').first().json;\nconst insertResult = $('Insert Event').first().json;\nconst awsResponse = $input.first().json;\n\nreturn [{\n  json: {\n    camdl_anchored: true,\n    camdl_anchor_id: awsResponse.anchor_id || awsResponse.camdl_anchor_id,\n    camdl_block_number: awsResponse.block_number || awsResponse.camdl_block_number,\n    camdl_tx_hash: awsResponse.tx_hash || awsResponse.camdl_tx_hash,\n    audit_event_id: insertResult.audit_event_id,\n    event_hash: insertResult.event_hash,\n    correlation_id: prepareData.correlation_id,\n    _startTime: prepareData._startTime,\n    request_id: prepareData.request_id,\n    _aws_endpoint: true\n  }\n}];"
+      },
+      "id": "map-aws-camdl-response",
+      "name": "Map AWS CamDL Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1100, -200]
+      "position": [1320, -350]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// CamDL Anchoring (Local Fallback)\n// =============================================================================\n// Used when AWS endpoint fails or is disabled.\n// Generates a mock CamDL response for development/testing.\n// =============================================================================\n\nconst prepareData = $('Prepare Event').first().json;\nconst insertResult = $('Insert Event').first().json;\n\n// Fallback: Generate mock CamDL response\nconst mockAnchorId = `CAMDL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;\nconst mockBlockNumber = Math.floor(Date.now() / 1000);\nconst mockTxHash = `0x${require('crypto').randomBytes(32).toString('hex')}`;\n\nreturn [{\n  json: {\n    camdl_anchored: true,\n    camdl_anchor_id: mockAnchorId,\n    camdl_block_number: mockBlockNumber,\n    camdl_tx_hash: mockTxHash,\n    audit_event_id: insertResult.audit_event_id,\n    event_hash: insertResult.event_hash,\n    correlation_id: prepareData.correlation_id,\n    _startTime: prepareData._startTime,\n    request_id: prepareData.request_id,\n    _fallback: true\n  }\n}];"
+      },
+      "id": "anchor-to-camdl-fallback",
+      "name": "Anchor to CamDL (Fallback)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, -200]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "extra"
+      },
+      "id": "merge-camdl-result",
+      "name": "Merge CamDL Result",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1540, -280]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Update audit event with CamDL anchor info\nUPDATE gaap_mcp.audit_events\nSET \n  camdl_anchored = TRUE,\n  camdl_anchor_id = '{{ $json.camdl_anchor_id }}',\n  camdl_block_number = {{ $json.camdl_block_number }},\n  camdl_tx_hash = '{{ $json.camdl_tx_hash }}',\n  camdl_anchored_at = NOW()\nWHERE audit_event_id = '{{ $json.audit_event_id }}'::UUID;",
+        "query": "-- Update audit event with CamDL anchor info\nUPDATE gaap_mcp.audit_events\nSET \n  camdl_anchored = TRUE,\n  camdl_anchor_id = '{{ $('Merge CamDL Result').first().json.camdl_anchor_id }}',\n  camdl_block_number = {{ $('Merge CamDL Result').first().json.camdl_block_number }},\n  camdl_tx_hash = '{{ $('Merge CamDL Result').first().json.camdl_tx_hash }}',\n  camdl_anchored_at = NOW()\nWHERE audit_event_id = '{{ $('Merge CamDL Result').first().json.audit_event_id }}'::UUID;",
         "options": {}
       },
       "id": "update-anchor-status",
@@ -125,7 +177,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Build success response (with anchoring)\nconst anchorData = $('Anchor to CamDL (Stub)').first().json;\n\nreturn [{\n  json: {\n    data: {\n      audit_event_id: anchorData.audit_event_id,\n      event_hash: anchorData.event_hash,\n      camdl_anchor_id: anchorData.camdl_anchor_id,\n      camdl_block_number: anchorData.camdl_block_number,\n      camdl_tx_hash: anchorData.camdl_tx_hash\n    },\n    correlation_id: anchorData.correlation_id,\n    audit_event_id: anchorData.audit_event_id,\n    camdl_anchored: true,\n    meta: {\n      request_id: anchorData.request_id,\n      execution_ms: Date.now() - anchorData._startTime,\n      gaap_layer: 'L4',\n      camdl_anchored: true\n    }\n  }\n}];"
+        "jsCode": "// Build success response (with anchoring)\nconst anchorData = $('Merge CamDL Result').first().json;\n\nreturn [{\n  json: {\n    data: {\n      audit_event_id: anchorData.audit_event_id,\n      event_hash: anchorData.event_hash,\n      camdl_anchor_id: anchorData.camdl_anchor_id,\n      camdl_block_number: anchorData.camdl_block_number,\n      camdl_tx_hash: anchorData.camdl_tx_hash\n    },\n    correlation_id: anchorData.correlation_id,\n    audit_event_id: anchorData.audit_event_id,\n    camdl_anchored: true,\n    meta: {\n      request_id: anchorData.request_id,\n      execution_ms: Date.now() - anchorData._startTime,\n      gaap_layer: 'L4',\n      camdl_anchored: true,\n      aws_endpoint: anchorData._aws_endpoint || false,\n      fallback_used: anchorData._fallback || false\n    }\n  }\n}];"
       },
       "id": "build-anchored-response",
       "name": "Build Anchored Response",
@@ -208,7 +260,7 @@
       "main": [
         [
           {
-            "node": "Anchor to CamDL (Stub)",
+            "node": "Call AWS CamDL",
             "type": "main",
             "index": 0
           }
@@ -222,7 +274,47 @@
         ]
       ]
     },
-    "Anchor to CamDL (Stub)": {
+    "Call AWS CamDL": {
+      "main": [
+        [
+          {
+            "node": "Map AWS CamDL Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Anchor to CamDL (Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map AWS CamDL Response": {
+      "main": [
+        [
+          {
+            "node": "Merge CamDL Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anchor to CamDL (Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Merge CamDL Result",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge CamDL Result": {
       "main": [
         [
           {

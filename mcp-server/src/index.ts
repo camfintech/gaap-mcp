@@ -292,8 +292,86 @@ const GAAP_TOOLS = [
       required: ['order_id', 'merchant_id', 'amount'],
     },
   },
-  // Future tools:
-  // - gaap_identity_verify
+  {
+    name: 'gaap_identity_verify',
+    description: 'Verify identity via CamDigiKey or phone OTP. Use for KYC/eKYC compliance checks. Returns verification status and identity assurance level.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        verification_type: {
+          type: 'string',
+          description: 'Type of verification: camdigikey_l1 (basic), camdigikey_l2 (high assurance), phone_otp, or document'
+        },
+        identifier: {
+          type: 'string',
+          description: 'Phone number (format: +855...), ID number, or CamDigiKey ID to verify'
+        },
+        verification_code: {
+          type: 'string',
+          description: 'OTP code or verification code (required for phone_otp type)'
+        },
+        customer_id: {
+          type: 'string',
+          description: 'Internal customer ID for linking verification to customer record'
+        },
+        metadata: {
+          type: 'object',
+          description: 'Additional context for the verification request'
+        },
+        correlation_id: {
+          type: 'string',
+          description: 'Correlation ID for tracing related events'
+        }
+      },
+      required: ['verification_type', 'identifier'],
+    },
+  },
+  {
+    name: 'gaap_aml_screen',
+    description: 'Perform AML/CFT screening via GaaS. Checks transactions, customers, PEP lists, and sanctions. Returns risk decision (ALLOW/REVIEW/BLOCK) with risk score and factors.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        screen_type: {
+          type: 'string',
+          description: 'Type of screening: transaction (amount-based), customer (identity), pep (politically exposed persons), sanctions (watchlists)'
+        },
+        customer_name: {
+          type: 'string',
+          description: 'Customer name for PEP/sanctions screening'
+        },
+        customer_id: {
+          type: 'string',
+          description: 'Internal customer ID'
+        },
+        transaction_amount: {
+          type: 'number',
+          description: 'Transaction amount for risk assessment'
+        },
+        transaction_currency: {
+          type: 'string',
+          description: 'Currency code: USD or KHR. Default: USD'
+        },
+        country_code: {
+          type: 'string',
+          description: 'Country code (ISO 3166-1 alpha-2) for jurisdiction risk. Default: KH'
+        },
+        entity_type: {
+          type: 'string',
+          description: 'Entity type: individual or business. Default: individual'
+        },
+        entity_id: {
+          type: 'string',
+          description: 'Order ID or entity reference being screened'
+        },
+        correlation_id: {
+          type: 'string',
+          description: 'Correlation ID for tracing related events'
+        }
+      },
+      required: ['screen_type'],
+    },
+  },
 ];
 
 // List available tools

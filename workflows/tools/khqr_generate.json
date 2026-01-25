@@ -50,13 +50,65 @@
     },
     {
       "parameters": {
-        "jsCode": "// =============================================================================\n// Bakong KHQR Generation (Stub Implementation)\n// =============================================================================\n// In production, this would call the Bakong API:\n// POST https://api-bakong.nbc.org.kh/v1/generate_khqr_individual\n// or\n// POST https://api-bakong.nbc.org.kh/v1/generate_khqr_merchant\n//\n// For now, we generate a valid KHQR format string locally.\n// KHQR follows EMVCo QR Code Specification for Payment Systems.\n// =============================================================================\n\nconst crypto = require('crypto');\nconst input = $input.first().json;\n\n// Helper: Generate TLV (Tag-Length-Value) string\nfunction tlv(tag, value) {\n  const len = value.length.toString().padStart(2, '0');\n  return tag + len + value;\n}\n\n// KHQR Data Structure (EMVCo format)\n// 00 - Payload Format Indicator\n// 01 - Point of Initiation Method (11=static, 12=dynamic)\n// 29 - Merchant Account Information (Bakong)\n// 52 - Merchant Category Code\n// 53 - Transaction Currency (840=USD, 116=KHR)\n// 54 - Transaction Amount\n// 58 - Country Code\n// 59 - Merchant Name\n// 60 - Merchant City\n// 62 - Additional Data Field Template\n// 63 - CRC (checksum)\n\nconst currencyCode = input.currency === 'KHR' ? '116' : '840';\nconst pointOfInit = input.amount > 0 ? '12' : '11'; // 12=dynamic (has amount), 11=static\n\n// Build Merchant Account Info (Tag 29 for Bakong)\nlet merchantAcctInfo = '';\nmerchantAcctInfo += tlv('00', 'bakong'); // GUI\nmerchantAcctInfo += tlv('01', input.account_id); // Account ID\nif (input.merchant_id) {\n  merchantAcctInfo += tlv('02', input.merchant_id); // Merchant ID\n}\n\n// Build Additional Data (Tag 62)\nlet additionalData = '';\nif (input.bill_number) {\n  additionalData += tlv('01', input.bill_number); // Bill Number\n}\nif (input.store_label) {\n  additionalData += tlv('03', input.store_label); // Store Label\n}\nif (input.terminal_label) {\n  additionalData += tlv('07', input.terminal_label); // Terminal Label\n}\nadditionalData += tlv('05', input.txn_ref); // Reference Label\n\n// Build QR payload (without CRC)\nlet qrPayload = '';\nqrPayload += tlv('00', '01'); // Payload Format Indicator\nqrPayload += tlv('01', pointOfInit); // Point of Initiation\nqrPayload += tlv('29', merchantAcctInfo); // Bakong Merchant Account\nqrPayload += tlv('52', '5999'); // MCC: Miscellaneous\nqrPayload += tlv('53', currencyCode); // Currency\nif (input.amount > 0) {\n  qrPayload += tlv('54', input.amount.toFixed(2)); // Amount\n}\nqrPayload += tlv('58', 'KH'); // Country Code\nqrPayload += tlv('59', input.merchant_name.substring(0, 25)); // Merchant Name\nqrPayload += tlv('60', input.merchant_city.substring(0, 15)); // City\nif (additionalData) {\n  qrPayload += tlv('62', additionalData); // Additional Data\n}\n\n// Calculate CRC-16 (CCITT-FALSE)\nfunction crc16(str) {\n  let crc = 0xFFFF;\n  for (let i = 0; i < str.length; i++) {\n    crc ^= str.charCodeAt(i) << 8;\n    for (let j = 0; j < 8; j++) {\n      if (crc & 0x8000) {\n        crc = (crc << 1) ^ 0x1021;\n      } else {\n        crc <<= 1;\n      }\n      crc &= 0xFFFF;\n    }\n  }\n  return crc.toString(16).toUpperCase().padStart(4, '0');\n}\n\n// Add CRC placeholder and calculate\nconst crcInput = qrPayload + '6304';\nconst crc = crc16(crcInput);\nconst qrData = qrPayload + '6304' + crc;\n\n// Generate MD5 for payment verification\nconst md5Hash = crypto.createHash('md5').update(qrData + Date.now()).digest('hex');\n\n// Calculate expiry\nconst expiresAt = new Date(Date.now() + input.expiry_minutes * 60 * 1000).toISOString();\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    qr_data: qrData,\n    md5: md5Hash,\n    txn_ref: input.txn_ref,\n    amount: input.amount,\n    currency: input.currency,\n    expires_at: expiresAt,\n    qr_type: input.qr_type\n  }\n}];"
+        "method": "POST",
+        "url": "https://lg99tn8y8g.execute-api.ap-southeast-1.amazonaws.com/v1/bakong/khqr/generate",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $json.correlation_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"amount\": {{ $json.amount }},\n  \"currency\": \"{{ $json.currency }}\",\n  \"merchant_name\": \"{{ $json.merchant_name }}\",\n  \"merchant_city\": \"{{ $json.merchant_city }}\",\n  \"account_id\": \"{{ $json.account_id }}\",\n  \"bill_number\": \"{{ $json.bill_number || '' }}\",\n  \"expiry_minutes\": {{ $json.expiry_minutes }}\n}",
+        "options": {
+          "timeout": 10000
+        }
       },
-      "id": "generate-khqr",
-      "name": "Generate KHQR",
+      "id": "call-aws-bakong",
+      "name": "Call AWS Bakong KHQR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 100],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Bakong KHQR Generation (Local Fallback)\n// =============================================================================\n// Used when AWS endpoint fails or is disabled.\n// Generates a valid KHQR format string locally.\n// KHQR follows EMVCo QR Code Specification for Payment Systems.\n// =============================================================================\n\nconst crypto = require('crypto');\nconst input = $('Validate Params').first().json;\n\n// Helper: Generate TLV (Tag-Length-Value) string\nfunction tlv(tag, value) {\n  const len = value.length.toString().padStart(2, '0');\n  return tag + len + value;\n}\n\nconst currencyCode = input.currency === 'KHR' ? '116' : '840';\nconst pointOfInit = input.amount > 0 ? '12' : '11';\n\n// Build Merchant Account Info (Tag 29 for Bakong)\nlet merchantAcctInfo = '';\nmerchantAcctInfo += tlv('00', 'bakong');\nmerchantAcctInfo += tlv('01', input.account_id);\nif (input.merchant_id) {\n  merchantAcctInfo += tlv('02', input.merchant_id);\n}\n\n// Build Additional Data (Tag 62)\nlet additionalData = '';\nif (input.bill_number) {\n  additionalData += tlv('01', input.bill_number);\n}\nif (input.store_label) {\n  additionalData += tlv('03', input.store_label);\n}\nif (input.terminal_label) {\n  additionalData += tlv('07', input.terminal_label);\n}\nadditionalData += tlv('05', input.txn_ref);\n\n// Build QR payload (without CRC)\nlet qrPayload = '';\nqrPayload += tlv('00', '01');\nqrPayload += tlv('01', pointOfInit);\nqrPayload += tlv('29', merchantAcctInfo);\nqrPayload += tlv('52', '5999');\nqrPayload += tlv('53', currencyCode);\nif (input.amount > 0) {\n  qrPayload += tlv('54', input.amount.toFixed(2));\n}\nqrPayload += tlv('58', 'KH');\nqrPayload += tlv('59', input.merchant_name.substring(0, 25));\nqrPayload += tlv('60', input.merchant_city.substring(0, 15));\nif (additionalData) {\n  qrPayload += tlv('62', additionalData);\n}\n\n// Calculate CRC-16 (CCITT-FALSE)\nfunction crc16(str) {\n  let crc = 0xFFFF;\n  for (let i = 0; i < str.length; i++) {\n    crc ^= str.charCodeAt(i) << 8;\n    for (let j = 0; j < 8; j++) {\n      if (crc & 0x8000) {\n        crc = (crc << 1) ^ 0x1021;\n      } else {\n        crc <<= 1;\n      }\n      crc &= 0xFFFF;\n    }\n  }\n  return crc.toString(16).toUpperCase().padStart(4, '0');\n}\n\nconst crcInput = qrPayload + '6304';\nconst crc = crc16(crcInput);\nconst qrData = qrPayload + '6304' + crc;\n\nconst md5Hash = crypto.createHash('md5').update(qrData + Date.now()).digest('hex');\nconst expiresAt = new Date(Date.now() + input.expiry_minutes * 60 * 1000).toISOString();\n\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    qr_data: qrData,\n    md5: md5Hash,\n    txn_ref: input.txn_ref,\n    amount: input.amount,\n    currency: input.currency,\n    expires_at: expiresAt,\n    qr_type: input.qr_type,\n    _fallback: true\n  }\n}];"
+      },
+      "id": "generate-khqr-fallback",
+      "name": "Generate KHQR (Fallback)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 100]
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================================\n// Merge AWS Response with Input Context\n// =============================================================================\nconst input = $('Validate Params').first().json;\nconst awsResponse = $input.first().json;\n\n// Map AWS response to expected format\nreturn [{\n  json: {\n    _startTime: input._startTime,\n    request_id: input.request_id,\n    tenant_id: input.tenant_id,\n    correlation_id: input.correlation_id,\n    qr_data: awsResponse.qr_data || awsResponse.khqr_data,\n    md5: awsResponse.md5 || awsResponse.hash,\n    txn_ref: awsResponse.txn_ref || awsResponse.transaction_ref || input.txn_ref,\n    amount: input.amount,\n    currency: input.currency,\n    expires_at: awsResponse.expires_at || awsResponse.expiry,\n    qr_type: input.qr_type,\n    _aws_endpoint: true\n  }\n}];"
+      },
+      "id": "merge-aws-response",
+      "name": "Merge AWS Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "extra"
+      },
+      "id": "merge-khqr-result",
+      "name": "Merge KHQR Result",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1100, 100]
     },
     {
       "parameters": {
@@ -78,7 +130,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Build success response\nconst khqrData = $('Generate KHQR').first().json;\nconst invocation = $('Log Invocation').first().json;\n\nreturn [{\n  json: {\n    data: {\n      qr_data: khqrData.qr_data,\n      md5: khqrData.md5,\n      txn_ref: khqrData.txn_ref,\n      amount: khqrData.amount,\n      currency: khqrData.currency,\n      expires_at: khqrData.expires_at,\n      qr_type: khqrData.qr_type\n    },\n    correlation_id: khqrData.correlation_id,\n    invocation_id: invocation.invocation_id,\n    meta: {\n      request_id: khqrData.request_id,\n      execution_ms: Date.now() - khqrData._startTime,\n      gaap_layer: 'L3',\n      camdl_anchored: false\n    }\n  }\n}];"
+        "jsCode": "// Build success response\nconst khqrData = $('Merge KHQR Result').first().json;\nconst invocation = $('Log Invocation').first().json;\n\nreturn [{\n  json: {\n    data: {\n      qr_data: khqrData.qr_data,\n      md5: khqrData.md5,\n      txn_ref: khqrData.txn_ref,\n      amount: khqrData.amount,\n      currency: khqrData.currency,\n      expires_at: khqrData.expires_at,\n      qr_type: khqrData.qr_type\n    },\n    correlation_id: khqrData.correlation_id,\n    invocation_id: invocation.invocation_id,\n    meta: {\n      request_id: khqrData.request_id,\n      execution_ms: Date.now() - khqrData._startTime,\n      gaap_layer: 'L3',\n      camdl_anchored: false,\n      aws_endpoint: khqrData._aws_endpoint || false,\n      fallback_used: khqrData._fallback || false\n    }\n  }\n}];"
       },
       "id": "build-response",
       "name": "Build Response",
@@ -129,14 +181,54 @@
         ],
         [
           {
-            "node": "Generate KHQR",
+            "node": "Call AWS Bakong KHQR",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Generate KHQR": {
+    "Call AWS Bakong KHQR": {
+      "main": [
+        [
+          {
+            "node": "Merge AWS Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate KHQR (Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge AWS Response": {
+      "main": [
+        [
+          {
+            "node": "Merge KHQR Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate KHQR (Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Merge KHQR Result",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge KHQR Result": {
       "main": [
         [
           {

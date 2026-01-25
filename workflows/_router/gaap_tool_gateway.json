@@ -19,7 +19,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// =============================================================================\n// STEP 1: Extract and validate request structure\n// =============================================================================\nconst startTime = Date.now();\nconst headers = $input.first().json.headers || {};\nconst body = $input.first().json.body || {};\n\n// Generate request ID if not provided\nconst requestId = body.meta?.request_id || `GAAP-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;\n\n// Required fields validation\nconst requiredFields = ['tool', 'tenant_context'];\nconst missingFields = requiredFields.filter(f => !body[f]);\n\nif (missingFields.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_INVALID_REQUEST',\n        message: `Missing required fields: ${missingFields.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Validate tenant_context structure\nconst tenantContext = body.tenant_context;\nif (!tenantContext.tenant_id) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_INVALID_TENANT_CONTEXT',\n        message: 'tenant_context.tenant_id is required',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Extract headers for auth verification\nconst authHeaders = {\n  tenantId: headers['x-tenant-id'] || headers['X-Tenant-ID'],\n  apiKey: headers['x-api-key'] || headers['X-API-Key'],\n  timestamp: headers['x-timestamp'] || headers['X-Timestamp'],\n  nonce: headers['x-nonce'] || headers['X-Nonce'],\n  signature: headers['x-signature'] || headers['X-Signature']\n};\n\n// Validate required auth headers\nconst requiredHeaders = ['tenantId', 'apiKey', 'timestamp', 'nonce', 'signature'];\nconst missingHeaders = requiredHeaders.filter(h => !authHeaders[h]);\n\nif (missingHeaders.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_MISSING_AUTH_HEADERS',\n        message: `Missing required headers: X-${missingHeaders.map(h => h.replace(/([A-Z])/g, '-$1').toUpperCase()).join(', X-')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Validate tenant_id matches header\nif (authHeaders.tenantId !== tenantContext.tenant_id) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_TENANT_MISMATCH',\n        message: 'X-Tenant-ID header must match tenant_context.tenant_id',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Define tool to GaaP layer mapping\nconst toolLayerMap = {\n  'gaap_identity_verify': 'L1',\n  'gaap_identity_check_level': 'L1',\n  'gaap_identity_generate_qr': 'L1',\n  'gaap_policy_evaluate': 'L2',\n  'gaap_policy_publish_intent': 'L2',\n  'gaap_khqr_generate': 'L3',\n  'gaap_khqr_verify_settlement': 'L3',\n  'gaap_khqr_poll_status': 'L3',\n  'gaap_audit_log_event': 'L4',\n  'gaap_audit_anchor_batch': 'L4',\n  'gaap_audit_verify': 'L4',\n  'gaap_audit_generate_proof': 'L4'\n};\n\nconst toolName = body.tool;\nconst gaapLayer = toolLayerMap[toolName];\n\nif (!gaapLayer) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_UNKNOWN_TOOL',\n        message: `Unknown tool: ${toolName}. Available tools: ${Object.keys(toolLayerMap).join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Pass validated data forward\nreturn [{\n  json: {\n    _startTime: startTime,\n    request_id: requestId,\n    tool: toolName,\n    gaap_layer: gaapLayer,\n    tenant_context: tenantContext,\n    params: body.params || {},\n    meta: body.meta || {},\n    auth: authHeaders,\n    raw_body: JSON.stringify(body),\n    source_ip: $input.first().json.headers?.['x-forwarded-for'] || 'unknown'\n  }\n}];"
+        "jsCode": "// =============================================================================\n// STEP 1: Extract and validate request structure\n// =============================================================================\nconst startTime = Date.now();\nconst headers = $input.first().json.headers || {};\nconst body = $input.first().json.body || {};\n\n// Generate request ID if not provided\nconst requestId = body.meta?.request_id || `GAAP-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;\n\n// Required fields validation\nconst requiredFields = ['tool', 'tenant_context'];\nconst missingFields = requiredFields.filter(f => !body[f]);\n\nif (missingFields.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_INVALID_REQUEST',\n        message: `Missing required fields: ${missingFields.join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Validate tenant_context structure\nconst tenantContext = body.tenant_context;\nif (!tenantContext.tenant_id) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_INVALID_TENANT_CONTEXT',\n        message: 'tenant_context.tenant_id is required',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Extract headers for auth verification\nconst authHeaders = {\n  tenantId: headers['x-tenant-id'] || headers['X-Tenant-ID'],\n  apiKey: headers['x-api-key'] || headers['X-API-Key'],\n  timestamp: headers['x-timestamp'] || headers['X-Timestamp'],\n  nonce: headers['x-nonce'] || headers['X-Nonce'],\n  signature: headers['x-signature'] || headers['X-Signature']\n};\n\n// Validate required auth headers\nconst requiredHeaders = ['tenantId', 'apiKey', 'timestamp', 'nonce', 'signature'];\nconst missingHeaders = requiredHeaders.filter(h => !authHeaders[h]);\n\nif (missingHeaders.length > 0) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_MISSING_AUTH_HEADERS',\n        message: `Missing required headers: X-${missingHeaders.map(h => h.replace(/([A-Z])/g, '-$1').toUpperCase()).join(', X-')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Validate tenant_id matches header\nif (authHeaders.tenantId !== tenantContext.tenant_id) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_TENANT_MISMATCH',\n        message: 'X-Tenant-ID header must match tenant_context.tenant_id',\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Define tool to GaaP layer mapping\nconst toolLayerMap = {\n  'gaap_identity_verify': 'L1',\n  'gaap_identity_check_level': 'L1',\n  'gaap_identity_generate_qr': 'L1',\n  'gaap_policy_evaluate': 'L2',\n  'gaap_policy_publish_intent': 'L2',\n  'gaap_khqr_generate': 'L3',\n  'gaap_khqr_verify_settlement': 'L3',\n  'gaap_khqr_poll_status': 'L3',\n  'gaap_audit_log_event': 'L4',\n  'gaap_audit_anchor_batch': 'L4',\n  'gaap_audit_verify': 'L4',\n  'gaap_audit_generate_proof': 'L4',\n  'gaap_aml_screen': 'L4'\n};\n\nconst toolName = body.tool;\nconst gaapLayer = toolLayerMap[toolName];\n\nif (!gaapLayer) {\n  return [{\n    json: {\n      _error: true,\n      error: {\n        code: 'MCP_UNKNOWN_TOOL',\n        message: `Unknown tool: ${toolName}. Available tools: ${Object.keys(toolLayerMap).join(', ')}`,\n        recoverable: false\n      },\n      meta: {\n        request_id: requestId,\n        execution_ms: Date.now() - startTime,\n        gaap_layer: 'MCP'\n      }\n    }\n  }];\n}\n\n// Pass validated data forward\nreturn [{\n  json: {\n    _startTime: startTime,\n    request_id: requestId,\n    tool: toolName,\n    gaap_layer: gaapLayer,\n    tenant_context: tenantContext,\n    params: body.params || {},\n    meta: body.meta || {},\n    auth: authHeaders,\n    raw_body: JSON.stringify(body),\n    source_ip: $input.first().json.headers?.['x-forwarded-for'] || 'unknown'\n  }\n}];"
       },
       "id": "validate-request",
       "name": "Validate Request",
@@ -363,6 +363,50 @@
               },
               "renameOutput": true,
               "outputKey": "policy_evaluate"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.tool }}",
+                    "rightValue": "gaap_identity_verify",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "identity_verify"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.tool }}",
+                    "rightValue": "gaap_aml_screen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "aml_screen"
             }
           ],
           "fallbackOutput": {
@@ -392,6 +436,51 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
       "position": [3740, -600]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $workflow.id.replace('gaap_tool_gateway', 'khqr_generate') }}"
+        },
+        "options": {}
+      },
+      "id": "execute-khqr-generate",
+      "name": "Execute KHQR Generate",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [3740, -500]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $workflow.id.replace('gaap_tool_gateway', 'identity_verify') }}"
+        },
+        "options": {}
+      },
+      "id": "execute-identity-verify",
+      "name": "Execute Identity Verify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [3740, -400]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $workflow.id.replace('gaap_tool_gateway', 'aml_screen') }}"
+        },
+        "options": {}
+      },
+      "id": "execute-aml-screen",
+      "name": "Execute AML Screen",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [3740, -200]
     },
     {
       "parameters": {
@@ -669,7 +758,7 @@
         ],
         [
           {
-            "node": "Tool Not Implemented",
+            "node": "Execute KHQR Generate",
             "type": "main",
             "index": 0
           }
@@ -677,6 +766,20 @@
         [
           {
             "node": "Tool Not Implemented",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute Identity Verify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute AML Screen",
             "type": "main",
             "index": 0
           }
@@ -691,6 +794,39 @@
       ]
     },
     "Execute Audit Log": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute KHQR Generate": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Identity Verify": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute AML Screen": {
       "main": [
         [
           {

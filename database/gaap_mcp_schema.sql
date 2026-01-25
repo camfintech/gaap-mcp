@@ -247,6 +247,110 @@ CREATE INDEX idx_audit_type ON gaap_mcp.audit_events(event_type);
 CREATE INDEX idx_audit_pending_anchor ON gaap_mcp.audit_events(tenant_id) WHERE camdl_anchored = FALSE;
 
 -- =============================================================================
+-- IDENTITY VERIFICATIONS
+-- Stores CamDigiKey and OTP verification results
+-- =============================================================================
+CREATE TABLE gaap_mcp.identity_verifications (
+    verification_id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+
+    -- Request context
+    correlation_id VARCHAR(100) NOT NULL,
+    verification_type VARCHAR(50) NOT NULL
+        CHECK (verification_type IN ('camdigikey_l1', 'camdigikey_l2', 'phone_otp', 'document')),
+
+    -- Identifier (hashed for privacy)
+    identifier_hash VARCHAR(64) NOT NULL,  -- SHA-256 hash of phone/ID
+
+    -- Customer linking
+    customer_id VARCHAR(100),
+
+    -- Verification result
+    status VARCHAR(20) NOT NULL
+        CHECK (status IN ('pending', 'verified', 'failed', 'expired')),
+    identity_level VARCHAR(20) NOT NULL
+        CHECK (identity_level IN ('anonymous', 'basic', 'verified', 'high_assurance')),
+    camdigikey_id VARCHAR(100),
+
+    -- Timing
+    verified_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ,
+
+    -- Source tracking
+    aws_endpoint BOOLEAN DEFAULT FALSE,
+    fallback_used BOOLEAN DEFAULT FALSE,
+
+    -- Uniqueness per tenant
+    CONSTRAINT uq_tenant_verification UNIQUE (tenant_id, verification_id)
+);
+
+-- Indexes for identity verification queries
+CREATE INDEX idx_identity_tenant_time ON gaap_mcp.identity_verifications(tenant_id, created_at DESC);
+CREATE INDEX idx_identity_correlation ON gaap_mcp.identity_verifications(correlation_id);
+CREATE INDEX idx_identity_customer ON gaap_mcp.identity_verifications(tenant_id, customer_id) WHERE customer_id IS NOT NULL;
+CREATE INDEX idx_identity_camdigikey ON gaap_mcp.identity_verifications(camdigikey_id) WHERE camdigikey_id IS NOT NULL;
+CREATE INDEX idx_identity_status ON gaap_mcp.identity_verifications(tenant_id, status) WHERE status = 'pending';
+
+-- =============================================================================
+-- AML SCREENINGS
+-- Stores AML/CFT screening results from GaaS
+-- =============================================================================
+CREATE TABLE gaap_mcp.aml_screenings (
+    screening_id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+
+    -- Request context
+    correlation_id VARCHAR(100) NOT NULL,
+    screen_type VARCHAR(50) NOT NULL
+        CHECK (screen_type IN ('transaction', 'customer', 'pep', 'sanctions')),
+
+    -- Screening subject (hashed for privacy)
+    customer_name_hash VARCHAR(64),  -- SHA-256 hash of customer name
+    customer_id VARCHAR(100),
+
+    -- Transaction details
+    transaction_amount NUMERIC(15, 2),
+    transaction_currency VARCHAR(3) DEFAULT 'USD',
+    country_code VARCHAR(2) DEFAULT 'KH',
+
+    -- Entity reference
+    entity_type VARCHAR(50),
+    entity_id VARCHAR(100),
+
+    -- Screening result
+    decision VARCHAR(20) NOT NULL
+        CHECK (decision IN ('ALLOW', 'REVIEW', 'BLOCK')),
+    risk_score NUMERIC(5, 2) NOT NULL CHECK (risk_score >= 0 AND risk_score <= 100),
+    risk_factors JSONB DEFAULT '[]',
+
+    -- Match details (for PEP/sanctions)
+    match_count INTEGER DEFAULT 0,
+    match_details JSONB DEFAULT '[]',
+
+    -- Timing
+    screened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- Source tracking
+    aws_endpoint BOOLEAN DEFAULT FALSE,
+    fallback_used BOOLEAN DEFAULT FALSE,
+
+    -- Uniqueness per tenant
+    CONSTRAINT uq_tenant_screening UNIQUE (tenant_id, screening_id)
+);
+
+-- Indexes for AML screening queries
+CREATE INDEX idx_aml_tenant_time ON gaap_mcp.aml_screenings(tenant_id, created_at DESC);
+CREATE INDEX idx_aml_correlation ON gaap_mcp.aml_screenings(correlation_id);
+CREATE INDEX idx_aml_customer ON gaap_mcp.aml_screenings(tenant_id, customer_id) WHERE customer_id IS NOT NULL;
+CREATE INDEX idx_aml_entity ON gaap_mcp.aml_screenings(entity_type, entity_id) WHERE entity_id IS NOT NULL;
+CREATE INDEX idx_aml_decision ON gaap_mcp.aml_screenings(tenant_id, decision) WHERE decision IN ('REVIEW', 'BLOCK');
+CREATE INDEX idx_aml_risk ON gaap_mcp.aml_screenings(tenant_id, risk_score) WHERE risk_score >= 50;
+
+-- =============================================================================
 -- ROW-LEVEL SECURITY POLICIES
 -- =============================================================================
 
@@ -257,6 +361,8 @@ ALTER TABLE gaap_mcp.tool_invocations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gaap_mcp.nonce_registry ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gaap_mcp.rate_limits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gaap_mcp.audit_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE gaap_mcp.identity_verifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE gaap_mcp.aml_screenings ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies (tenant can only see their own data)
 CREATE POLICY tenant_isolation_credentials ON gaap_mcp.credentials
@@ -275,6 +381,12 @@ CREATE POLICY tenant_isolation_rate_limits ON gaap_mcp.rate_limits
     USING (tenant_id::text = current_setting('app.current_tenant_id', true));
 
 CREATE POLICY tenant_isolation_audit ON gaap_mcp.audit_events
+    USING (tenant_id::text = current_setting('app.current_tenant_id', true));
+
+CREATE POLICY tenant_isolation_identity ON gaap_mcp.identity_verifications
+    USING (tenant_id::text = current_setting('app.current_tenant_id', true));
+
+CREATE POLICY tenant_isolation_aml ON gaap_mcp.aml_screenings
     USING (tenant_id::text = current_setting('app.current_tenant_id', true));
 
 -- =============================================================================
@@ -397,3 +509,5 @@ COMMENT ON TABLE gaap_mcp.credentials IS 'Encrypted credential storage with scop
 COMMENT ON TABLE gaap_mcp.tool_invocations IS 'Audit log of all MCP tool invocations';
 COMMENT ON TABLE gaap_mcp.nonce_registry IS 'Replay attack prevention via nonce tracking';
 COMMENT ON TABLE gaap_mcp.audit_events IS 'Compliance event log with CamDL blockchain anchoring';
+COMMENT ON TABLE gaap_mcp.identity_verifications IS 'CamDigiKey and OTP identity verification records';
+COMMENT ON TABLE gaap_mcp.aml_screenings IS 'AML/CFT screening results from GaaS';
